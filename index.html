@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Spotify Songs and Playlists | Megan Judge</title>
+    <meta name="description" content="Track newly added songs on Spotify playlists by user Megan Judge.">
+    <meta name="keywords" content="Spotify, Music, Songs, Playlists, Megan Judge">
+    <meta name="author" content="Megan Judge">
+    <meta name="robots" content="index, follow">
+    <meta name="theme-color" content="#1db954">
+    <meta property="og:title" content="Spotify Songs and Playlists | Megan Judge">
+    <meta name="description" content="Track newly added songs on Spotify playlists by user Megan Judge.">
+    <meta property="og:url" content="https://spotify.jdge.cc/">
+    <meta property="og:image" content="https://spotify.jdge.cc/images/">
+    <meta property="og:type" content="website">
+    <meta property="og:locale" content="en_AU">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://spotify.jdge.cc/images/spotify_logo.png">
+    <meta name="twitter:image:alt" content="Playlists">
+    <link rel="icon" type="image/jpg" href="https://spotify.jdge.cc/images/spotify_logo.png">
+    <link rel="canonical" href="https://spotify.jdge.cc/">
+    <link rel="alternate" href="https://spotify.jdge.cc/" hreflang="en">
+    <link rel="stylesheet" href="styles.css">
+    <script src="script.js" defer></script>
+</head>
+
+<body>
+
+    <header>
+        <div class="container-header">
+            <div>
+                <h1>Spotify Songs &amp; Playlists</h1>
+                <p class="tagline">Tracking newly added songs for a single Spotify user.</p>
+            </div>
+
+            <button id="refreshButton" class="primary-button" type="button">
+                <span class="button-label-default">Refresh from Spotify</span>
+                <span class="button-label-loading">Refreshing…</span>
+            </button>
+        </div>
+    </header>
+
+    <main>
+        <section id="statusSection" class="status-section">
+            <p id="statusMessage">Loading latest snapshot…</p>
+        </section>
+
+        <section id="summarySection" class="summary-grid" hidden>
+            <article class="summary-card">
+                <h2>Total playlists</h2>
+                <p id="totalPlaylists" class="summary-value">–</p>
+            </article>
+            <article class="summary-card">
+                <h2>New tracks</h2>
+                <p id="totalNewTracks" class="summary-value">–</p>
+            </article>
+            <article class="summary-card">
+                <h2>Last updated</h2>
+                <p id="lastUpdated" class="summary-value">Not yet run</p>
+            </article>
+        </section>
+
+        <section id="playlistsSection" class="playlists-section">
+            <div class="section-header">
+                <h2>Playlists with new songs</h2>
+            </div>
+            <div id="playlistsContainer" class="playlists-grid">
+                <!-- Filled by script.js -->
+            </div>
+        </section>
+
+        <section id="noChangesSection" class="no-changes muted" hidden>
+            <p>No new songs detected since the last scan.</p>
+        </section>
+    </main>
+
+    <footer>
+        <div class="container-footer">
+            <p>Data pulled from the Spotify Web API via a Cloudflare Worker. Only playlist data for a single configured user is read.</p>
+            <p>©️ Megan Judge</p>
+        </div>
+    </footer>
+
+</body>
+</html>

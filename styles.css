@@ -1,0 +1,360 @@
+/* Spotify theme */
+:root {
+  --spotify-green: #1db954;
+  --spotify-black: #191414;
+
+  --bg-body: var(--spotify-black);
+  --bg-card: #1c1c1c;
+  --border-subtle: #282828;
+
+  --text-primary: #ffffff;
+  --text-muted: #b3b3b3;
+
+  --radius-lg: 16px;
+  --radius-pill: 999px;
+}
+
+/* Reset / base */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  min-height: 100vh;
+  background: radial-gradient(circle at top, #1db95422 0, #191414 55%);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--spotify-green);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* Layout */
+
+header {
+  border-bottom: 1px solid var(--border-subtle);
+  background: linear-gradient(
+    135deg,
+    #1db95433,
+    transparent 45%,
+    transparent 100%
+  );
+}
+
+.container-header,
+.container-footer {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 0 1.5rem;
+}
+
+.container-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.5rem;
+  padding: 1.5rem 0;
+}
+
+main {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 1.75rem 1.5rem 2.5rem;
+}
+
+footer {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.container-footer {
+  padding: 1.25rem 0 1.75rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+/* Header text */
+
+header h1 {
+  margin: 0;
+  font-size: 1.75rem;
+}
+
+.tagline {
+  margin: 0.35rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+}
+
+/* Button */
+
+.primary-button {
+  border: none;
+  border-radius: var(--radius-pill);
+  padding: 0.6rem 1.4rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: var(--spotify-green);
+  color: var(--spotify-black);
+  transition: transform 0.08s ease-out, box-shadow 0.08s ease-out,
+    background 0.12s ease-out, opacity 0.12s ease-out;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.5);
+}
+
+.primary-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.6);
+}
+
+.primary-button:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+
+.primary-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+  box-shadow: none;
+}
+
+.primary-button .button-label-loading {
+  display: none;
+}
+
+.primary-button.is-loading .button-label-default {
+  display: none;
+}
+
+.primary-button.is-loading .button-label-loading {
+  display: inline;
+}
+
+/* Status + summary */
+
+.status-section {
+  margin-bottom: 1rem;
+}
+
+#statusMessage {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+
+.summary-card {
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  padding: 1rem 1.2rem;
+  border: 1px solid var(--border-subtle);
+}
+
+.summary-card h2 {
+  margin: 0 0 0.4rem;
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.summary-value {
+  margin: 0;
+  font-size: 1.4rem;
+  font-weight: 600;
+}
+
+/* Playlists */
+
+.playlists-section {
+  margin-top: 1rem;
+}
+
+.section-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.section-header h2 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.playlists-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+
+.playlist-card {
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-subtle);
+  padding: 1rem 1.1rem;
+}
+
+.playlist-header {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  margin-bottom: 0.7rem;
+}
+
+.playlist-image {
+  width: 64px;
+  height: 64px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: #000000;
+}
+
+.playlist-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.playlist-name {
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.playlist-name:hover {
+  text-decoration: underline;
+}
+
+.playlist-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.75rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.badge {
+  border-radius: var(--radius-pill);
+  padding: 0.1rem 0.6rem;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border: 1px solid transparent;
+}
+
+.badge-new {
+  background: rgba(29, 185, 84, 0.1);
+  border-color: rgba(29, 185, 84, 0.6);
+  color: var(--spotify-green);
+}
+
+/* Tracks */
+
+.tracks-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.25rem 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.track {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.9rem;
+}
+
+.track-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.track-title {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.track-title:hover {
+  text-decoration: underline;
+}
+
+.track-artists {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.track-added {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+/* Misc */
+
+.muted {
+  color: var(--text-muted);
+}
+
+.no-changes {
+  margin-top: 1.5rem;
+  font-size: 0.95rem;
+}
+
+/* Responsive */
+
+@media (max-width: 640px) {
+  .container-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .playlist-header {
+    align-items: flex-start;
+  }
+
+  .track {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .container-footer {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
