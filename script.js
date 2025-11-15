@@ -1,6 +1,6 @@
 // script.js
 (() => {
-  // Adjust this if you route the worker through a custom domain.
+  // Point this to your Worker
   const WORKER_BASE_URL = 'https://restless-breeze-4929.touch-97a.workers.dev';
 
   const refreshButton = document.getElementById('refreshButton');
@@ -12,6 +12,10 @@
   const totalPlaylistsEl = document.getElementById('totalPlaylists');
   const totalNewTracksEl = document.getElementById('totalNewTracks');
   const lastUpdatedEl = document.getElementById('lastUpdated');
+
+  const topsSection = document.getElementById('topsSection');
+  const topArtistsList = document.getElementById('topArtistsList');
+  const topTracksList = document.getElementById('topTracksList');
 
   function setButtonLoading(isLoading) {
     if (!refreshButton) return;
@@ -25,9 +29,11 @@
     setButtonLoading(refresh);
 
     try {
-      statusMessage.textContent = refresh
-        ? 'Refreshing from Spotify…'
-        : 'Loading latest snapshot…';
+      if (statusMessage) {
+        statusMessage.textContent = refresh
+          ? 'Refreshing from Spotify…'
+          : 'Loading latest snapshot…';
+      }
 
       const response = await fetch(WORKER_BASE_URL + endpoint, {
         method: refresh ? 'POST' : 'GET',
@@ -44,10 +50,12 @@
       renderData(data);
     } catch (err) {
       console.error(err);
-      statusMessage.textContent =
-        'Something went wrong talking to the worker. Please try again in a moment.';
-      summarySection.hidden = true;
-      playlistsContainer.innerHTML = '';
+      if (statusMessage) {
+        statusMessage.textContent =
+          'Something went wrong talking to the worker. Please try again in a moment.';
+      }
+      if (summarySection) summarySection.hidden = true;
+      if (playlistsContainer) playlistsContainer.innerHTML = '';
       if (noChangesSection) noChangesSection.hidden = true;
     } finally {
       setButtonLoading(false);
@@ -56,10 +64,12 @@
 
   function renderData(data) {
     if (!data) {
-      statusMessage.textContent =
-        'No data in storage yet. Use “Refresh from Spotify” to run the first scan.';
-      summarySection.hidden = true;
-      playlistsContainer.innerHTML = '';
+      if (statusMessage) {
+        statusMessage.textContent =
+          'No data in storage yet. Use “Refresh from Spotify” to run the first scan.';
+      }
+      if (summarySection) summarySection.hidden = true;
+      if (playlistsContainer) playlistsContainer.innerHTML = '';
       if (noChangesSection) noChangesSection.hidden = true;
       return;
     }
@@ -71,43 +81,54 @@
       playlists = []
     } = data;
 
-    // Summary
-    summarySection.hidden = false;
-    totalPlaylistsEl.textContent =
-      typeof totalPlaylists === 'number' ? totalPlaylists : '–';
-    totalNewTracksEl.textContent =
-      typeof totalNewTracks === 'number' ? totalNewTracks : '–';
+    if (summarySection) summarySection.hidden = false;
 
-    if (lastUpdated) {
-      const d = new Date(lastUpdated);
-      lastUpdatedEl.textContent = isNaN(d.getTime())
-        ? lastUpdated
-        : d.toLocaleString(undefined, {
-            year: 'numeric',
-            month: 'short',
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit'
-          });
-    } else {
-      lastUpdatedEl.textContent = 'Not yet run';
+    if (totalPlaylistsEl) {
+      totalPlaylistsEl.textContent =
+        typeof totalPlaylists === 'number' ? String(totalPlaylists) : '–';
+    }
+    if (totalNewTracksEl) {
+      totalNewTracksEl.textContent =
+        typeof totalNewTracks === 'number' ? String(totalNewTracks) : '–';
     }
 
-    // Playlists with new tracks
+    if (lastUpdatedEl) {
+      if (lastUpdated) {
+        const d = new Date(lastUpdated);
+        lastUpdatedEl.textContent = isNaN(d.getTime())
+          ? lastUpdated
+          : d.toLocaleString(undefined, {
+              year: 'numeric',
+              month: 'short',
+              day: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit'
+            });
+      } else {
+        lastUpdatedEl.textContent = 'Not yet run';
+      }
+    }
+
     const playlistsWithNew = playlists.filter(
       (p) => (p.newTracksCount || (p.newTracks && p.newTracks.length)) > 0
     );
 
+    if (!playlistsContainer) return;
+
     playlistsContainer.innerHTML = '';
 
     if (!playlistsWithNew.length) {
-      statusMessage.textContent = 'Up to date.';
+      if (statusMessage) {
+        statusMessage.textContent = 'Up to date.';
+      }
       if (noChangesSection) noChangesSection.hidden = false;
       return;
     }
 
     if (noChangesSection) noChangesSection.hidden = true;
-    statusMessage.textContent = 'Here are the playlists with new songs:';
+    if (statusMessage) {
+      statusMessage.textContent = 'Here are the playlists with new songs:';
+    }
 
     playlistsWithNew.forEach((playlist) => {
       const card = document.createElement('article');
@@ -206,6 +227,99 @@
     });
   }
 
+  async function fetchTop() {
+    if (!topsSection || !topArtistsList || !topTracksList) {
+      return;
+    }
+
+    try {
+      const response = await fetch(WORKER_BASE_URL + '/api/top', {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`Top request failed with status ${response.status}`);
+      }
+
+      const data = await response.json();
+      renderTop(data);
+    } catch (err) {
+      console.error(err);
+      topsSection.hidden = true;
+    }
+  }
+
+  function renderTop(data) {
+    if (!data || !topsSection || !topArtistsList || !topTracksList) {
+      return;
+    }
+
+    const artists = Array.isArray(data.artists) ? data.artists : [];
+    const tracks = Array.isArray(data.tracks) ? data.tracks : [];
+
+    if (!artists.length && !tracks.length) {
+      topsSection.hidden = true;
+      return;
+    }
+
+    topsSection.hidden = false;
+
+    topArtistsList.innerHTML = artists
+      .map((a) => {
+        const img = a.image || 'https://spotify.jdge.cc/images/spotify_logo.png';
+        const genres = (a.genres || []).slice(0, 2).join(', ');
+        const subtitle =
+          genres || (a.followers ? `${a.followers.toLocaleString()} followers` : '');
+        const url = a.url || '#';
+
+        return `
+          <li class="tops-item">
+            <img src="${img}" alt="" class="tops-avatar" loading="lazy">
+            <div class="tops-body">
+              <a href="${url}" target="_blank" rel="noopener noreferrer" class="tops-title">
+                ${escapeHtml(a.name || 'Unknown artist')}
+              </a>
+              ${
+                subtitle
+                  ? `<span class="tops-subtitle">${escapeHtml(subtitle)}</span>`
+                  : ''
+              }
+            </div>
+          </li>
+        `;
+      })
+      .join('');
+
+    topTracksList.innerHTML = tracks
+      .map((t) => {
+        const img =
+          t.albumImage || 'https://spotify.jdge.cc/images/spotify_logo.png';
+        const artists = (t.artists || []).join(', ');
+        const subtitle = artists || t.album || '';
+        const url = t.url || '#';
+
+        return `
+          <li class="tops-item">
+            <img src="${img}" alt="" class="tops-avatar" loading="lazy">
+            <div class="tops-body">
+              <a href="${url}" target="_blank" rel="noopener noreferrer" class="tops-title">
+                ${escapeHtml(t.name || 'Unknown track')}
+              </a>
+              ${
+                subtitle
+                  ? `<span class="tops-subtitle">${escapeHtml(subtitle)}</span>`
+                  : ''
+              }
+            </div>
+          </li>
+        `;
+      })
+      .join('');
+  }
+
   function escapeHtml(str) {
     return String(str)
       .replace(/&/g, '&amp;')
@@ -217,10 +331,12 @@
 
   document.addEventListener('DOMContentLoaded', () => {
     if (refreshButton) {
-      refreshButton.addEventListener('click', () => fetchSummary({ refresh: true }));
+      refreshButton.addEventListener('click', () =>
+        fetchSummary({ refresh: true })
+      );
     }
 
-    // Load existing snapshot from KV on first load (no Spotify call).
     fetchSummary({ refresh: false });
+    fetchTop();
   });
 })();
