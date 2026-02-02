@@ -25,7 +25,7 @@
    * DOM
    ***********************/
   const refreshButton = document.getElementById("refreshButton");
-  const appMain = document.getElementById("appMain"); // make sure <main id="appMain"> exists
+  const appMain = document.getElementById("appMain");
 
   /***********************
    * STATE
@@ -39,7 +39,7 @@
   };
 
   /***********************
-   * UI
+   * UI Helpers
    ***********************/
   function setButtonLoading(isLoading) {
     if (!refreshButton) return;
@@ -59,6 +59,16 @@
   function fmtHoursFromMs(ms) {
     const h = (Number(ms) || 0) / 3600000;
     return `${h.toFixed(h >= 10 ? 0 : 1)}h`;
+  }
+
+  function fmtDurationFromMs(ms) {
+    const totalSec = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    if (m < 60) return `${m}m ${String(s).padStart(2, "0")}s`;
+    const h = Math.floor(m / 60);
+    const mm = m % 60;
+    return `${h}h ${mm}m`;
   }
 
   function setStatus(msg) {
@@ -102,13 +112,16 @@
             </div>
             <div class="panel-body">
               <div class="cards cards-compact" id="othersCards"></div>
+            </div>
+          </section>
 
-              <div class="subpanel" style="margin-top:14px;">
-                <div class="subpanel-header">
-                  <div class="subpanel-title">Year Summary Playlist</div>
-                </div>
-                <div class="cards cards-compact" id="yearSummaryCards"></div>
-              </div>
+          <!-- YEAR SUMMARY AS ITS OWN PANEL (NOT INSIDE OTHERS) -->
+          <section class="panel" style="margin-top:16px;">
+            <div class="panel-header">
+              <h2 class="panel-title">Year Summary Playlist</h2>
+            </div>
+            <div class="panel-body">
+              <div class="cards cards-compact" id="yearSummaryCards"></div>
             </div>
           </section>
 
@@ -116,15 +129,15 @@
 
         <!-- MIDDLE COLUMN -->
         <section class="panel col col-mid">
-          <div class="panel-body">
+          <div class="panel-body col-scroll-body">
             <div class="filter-pills" id="filterPills"></div>
 
-            <div class="subpanel" style="margin-top:12px;">
+            <div class="subpanel subpanel-flex" style="margin-top:12px;">
               <div class="subpanel-header">
                 <div class="subpanel-title">Playlists</div>
                 <div class="subpanel-count" id="playlistCount">–</div>
               </div>
-              <div class="cards" id="playlistCards"></div>
+              <div class="cards cards-scroll" id="playlistCards"></div>
             </div>
           </div>
         </section>
@@ -134,7 +147,7 @@
           <div class="panel-header">
             <h2 class="panel-title">Podcast Episodes Watched</h2>
           </div>
-          <div class="panel-body">
+          <div class="panel-body col-scroll-body">
 
             <div class="podcast-head" id="podcastHead" hidden>
               <img class="podcast-thumb" id="podcastThumb" alt="">
@@ -150,7 +163,7 @@
 
             <div class="podcast-error" id="podcastError" hidden></div>
 
-            <ul class="podcast-list" id="podcastList"></ul>
+            <ul class="podcast-list podcast-scroll" id="podcastList"></ul>
           </div>
         </aside>
 
@@ -219,7 +232,7 @@
   }
 
   /***********************
-   * Statistics rendering (your exact 3-line spec, but in card positions)
+   * Statistics (REMOVE THE NOTE LINES)
    ***********************/
   function renderStatistics() {
     const grid = document.getElementById("statsGrid");
@@ -243,25 +256,21 @@
       <div class="stat-card">
         <div class="stat-kicker">Total songs</div>
         <div class="stat-big">${escapeHtml(String(songs))}</div>
-        <div class="stat-note">Excludes Podcast Episodes playlist</div>
       </div>
 
       <div class="stat-card">
         <div class="stat-kicker">Total song hours</div>
         <div class="stat-big">${escapeHtml(String(songHours))}</div>
-        <div class="stat-note">Excludes Podcast Episodes playlist</div>
       </div>
 
       <div class="stat-card">
         <div class="stat-kicker">Podcast episodes</div>
         <div class="stat-big">${escapeHtml(String(podEps))}</div>
-        <div class="stat-note">Only from Podcast Episodes playlist</div>
       </div>
 
       <div class="stat-card">
         <div class="stat-kicker">Podcast hours</div>
         <div class="stat-big">${escapeHtml(String(podHours))}</div>
-        <div class="stat-note">Only from Podcast Episodes playlist</div>
       </div>
     `;
   }
@@ -421,7 +430,17 @@
       }
 
       state.podcast.playlist = data.playlist || null;
-      state.podcast.items = Array.isArray(data.items) ? data.items : [];
+
+      const items = Array.isArray(data.items) ? data.items : [];
+
+      // newest added first (uses normalizeItem.addedAt)
+      items.sort((a, b) => {
+        const ta = a?.addedAt ? Date.parse(a.addedAt) : 0;
+        const tb = b?.addedAt ? Date.parse(b.addedAt) : 0;
+        return tb - ta;
+      });
+
+      state.podcast.items = items;
     } catch (e) {
       state.podcast.error = String(e?.message || e);
     }
@@ -450,7 +469,6 @@
       return;
     }
 
-    // after refresh: never show placeholder again
     empty.style.display = "none";
 
     if (error) {
@@ -480,21 +498,27 @@
   }
 
   function renderPodcastItem(it) {
+    const epImg = it.image || "https://spotify.jdge.cc/images/spotify_logo.png";
     const name = escapeHtml(it.name || "Untitled");
-    const show = escapeHtml((it.artists || []).join(", "));
+    const channel = escapeHtml((it.artists || []).join(", "));
+    const dur = fmtDurationFromMs(it.durationMs || 0);
     const url = it.url || "#";
+
     return `
       <li class="podcast-item">
-        <a class="podcast-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">
-          <div class="podcast-item-title">${name}</div>
-          <div class="podcast-item-sub">${show}</div>
+        <a class="podcast-link podcast-link-grid" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">
+          <img class="podcast-ep-thumb" src="${escapeHtml(epImg)}" alt="" loading="lazy">
+          <div class="podcast-ep-meta">
+            <div class="podcast-item-title">${name}</div>
+            <div class="podcast-item-sub">${channel ? channel + " • " : ""}${escapeHtml(dur)}</div>
+          </div>
         </a>
       </li>
     `;
   }
 
   /***********************
-   * Modal (playlist detail)
+   * Modal
    ***********************/
   function openModal() {
     const backdrop = document.getElementById("modalBackdrop");
@@ -604,7 +628,6 @@
       state.snapshot = data;
       state.filter = "all";
 
-      // these require /api/playlist POST to work
       await Promise.all([
         loadOthersAndYearSummary(),
         loadPodcastColumn()

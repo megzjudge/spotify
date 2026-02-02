@@ -1,5 +1,5 @@
 /* =========================
-   Spotify Dark UI v2
+   Spotify Dark UI v2 (with fixed footer + scroll panels)
    ========================= */
 
 :root {
@@ -26,6 +26,10 @@
 
   --max: 1200px;
   --pad: 22px;
+
+  /* Scroll sizing */
+  --colMaxH: calc(100vh - 170px); /* desktop: viewport minus header+spacing */
+  --mobileListMaxH: 264px;        /* ~3 items visible */
 }
 
 /* Reset */
@@ -35,16 +39,26 @@
 
 html, body { height: 100%; }
 
-body {
-  margin: 0;
-  color: var(--text);
-  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+/* Put the background on html to avoid “cutting” on mobile */
+html {
   background:
     radial-gradient(900px 520px at 18% 0%, rgba(29,185,84,0.18), transparent 60%),
     radial-gradient(900px 520px at 82% 0%, rgba(29,185,84,0.10), transparent 62%),
     radial-gradient(1100px 680px at 50% 110%, rgba(29,185,84,0.08), transparent 55%),
     linear-gradient(180deg, var(--bg0), var(--bg1) 70%, #050708);
+}
+
+body {
+  margin: 0;
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+  background: transparent;
   -webkit-font-smoothing: antialiased;
+
+  /* Sticky footer layout */
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
 
 a { color: inherit; text-decoration: none; }
@@ -78,7 +92,7 @@ header h1 {
   letter-spacing: 0.2px;
 }
 
-.tagline { display: none; } /* per your earlier request */
+.tagline { display: none; }
 
 /* Button */
 .primary-button {
@@ -114,13 +128,16 @@ header h1 {
 .primary-button.is-loading .button-label-loading { display: inline; }
 
 /* =========================
-   Main
+   Main (fills available height so footer stays at bottom)
 ========================= */
 
 main {
   max-width: var(--max);
   margin: 0 auto;
   padding: 18px var(--pad) 28px;
+  width: 100%;
+
+  flex: 1; /* key for sticky footer */
 }
 
 /* status line */
@@ -165,9 +182,22 @@ main {
   color: var(--muted);
 }
 
+/* Make bodies flex where needed */
 .panel-body { padding: 14px 14px 16px; }
 
-/* subpanels inside a panel */
+.col-scroll-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+
+  /* Desktop “lock to viewport” feel */
+  max-height: var(--colMaxH);
+}
+
+/* =========================
+   Subpanels
+========================= */
+
 .subpanel {
   border: 1px solid var(--stroke);
   border-radius: var(--radius-md);
@@ -194,8 +224,16 @@ main {
   font-size: 13px;
 }
 
+/* Let the playlists block expand + scroll internally */
+.subpanel-flex {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
 /* =========================
-   Statistics cards (your 3-line spec, but nice)
+   Statistics cards
 ========================= */
 
 .stats-grid {
@@ -228,14 +266,8 @@ main {
   line-height: 1.05;
 }
 
-.stat-note {
-  margin-top: 6px;
-  color: var(--muted2);
-  font-size: 12px;
-}
-
 /* =========================
-   Filter pills (middle column)
+   Filter pills
 ========================= */
 
 .filter-pills {
@@ -283,6 +315,13 @@ main {
 }
 
 .cards-compact { padding: 0; }
+
+/* Scrollable cards areas (Playlists + Podcast) */
+.cards-scroll {
+  overflow: auto;
+  min-height: 0;
+  flex: 1;
+}
 
 .card {
   display: grid;
@@ -333,7 +372,7 @@ main {
 .muted-small { color: var(--muted2); font-size: 13px; padding: 6px 2px; }
 
 /* =========================
-   Podcast column
+   Podcast column (episode thumbs + scroll)
 ========================= */
 
 .podcast-head {
@@ -341,7 +380,6 @@ main {
   grid-template-columns: 56px 1fr;
   gap: 12px;
   align-items: center;
-  margin-bottom: 12px;
 }
 
 .podcast-thumb {
@@ -384,10 +422,18 @@ main {
 .podcast-list {
   list-style: none;
   padding: 0;
-  margin: 12px 0 0;
+  margin: 0;
   display: flex;
   flex-direction: column;
   gap: 10px;
+
+  min-height: 0;
+}
+
+.podcast-scroll {
+  overflow: auto;
+  min-height: 0;
+  flex: 1;
 }
 
 .podcast-item {
@@ -401,6 +447,23 @@ main {
   display: block;
   padding: 10px 10px;
 }
+
+.podcast-link-grid {
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  gap: 12px;
+  align-items: center;
+}
+
+.podcast-ep-thumb {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  object-fit: cover;
+  background: #000;
+}
+
+.podcast-ep-meta { min-width: 0; }
 
 .podcast-item-title {
   font-weight: 750;
@@ -543,12 +606,12 @@ main {
 }
 
 /* =========================
-   Footer
+   Footer (pinned to bottom)
 ========================= */
 
 footer {
   border-top: 1px solid var(--stroke);
-  margin-top: 24px;
+  margin-top: auto; /* key for sticky footer */
 }
 
 .container-footer {
@@ -561,23 +624,36 @@ footer {
 ========================= */
 
 @media (max-width: 1100px) {
-  .app-grid {
-    grid-template-columns: 320px 1fr;
-  }
+  .app-grid { grid-template-columns: 320px 1fr; }
   .col-right { grid-column: 1 / -1; }
+
+  :root { --colMaxH: calc(100vh - 200px); }
 }
 
 @media (max-width: 860px) {
-  :root { --pad: 16px; }
-  .app-grid {
-    grid-template-columns: 1fr;
+  :root {
+    --pad: 16px;
+    --colMaxH: none;
+    --mobileListMaxH: 264px; /* 3-ish items */
   }
+
+  .app-grid { grid-template-columns: 1fr; }
   .panel { border-radius: 20px; }
+
   .container-header,
   .container-footer { padding-left: var(--pad); padding-right: var(--pad); }
+
   main { padding-left: var(--pad); padding-right: var(--pad); }
+
   .primary-button { width: 100%; min-width: 0; }
   .container-header { flex-direction: column; align-items: stretch; }
+
+  /* On mobile: lock playlist + podcast lists to ~3 items visible */
+  .cards-scroll { max-height: var(--mobileListMaxH); }
+  .podcast-scroll { max-height: var(--mobileListMaxH); }
+
+  /* Avoid mobile “background seams” from viewport height quirks */
+  body { min-height: 100%; }
 }
 
 @media (max-width: 420px) {
