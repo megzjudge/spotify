@@ -1,45 +1,58 @@
 // functions/api/refresh.js
+// Cloudflare Pages Function: POST /api/refresh
+//
+// Uses refresh token -> access token, then fetches playlists + tracks.
+// IMPORTANT: bounded by defaults to avoid function timeouts.
+// You can target a single playlist by passing { playlistId: "..." } in POST JSON.
 
 export async function onRequestPost(context) {
-  try {
-    const { env, request } = context;
+  const { env, request } = context;
 
-    // Optional: client can send lastUpdated so we only return items added since last scan
-    let lastScanAt = null;
-    try {
-      const body = await request.json();
-      if (body?.lastUpdated) lastScanAt = body.lastUpdated;
-    } catch {
-      // no body is fine
-    }
+  try {
+    // Parse optional request body
+    let body = {};
+    try { body = await request.json(); } catch {}
+
+    const lastScanAt = body?.lastUpdated || null;
+
+    // SAFETY LIMITS (avoid timeouts)
+    const playlistId = body?.playlistId || null;
+    const maxPlaylists = clampInt(body?.maxPlaylists, 1, 50, 10); // default 10
+    const maxTracksPerPlaylist = clampInt(body?.maxTracksPerPlaylist, 1, 200, 100); // default 100
+    const includeTrackDetails = body?.includeTrackDetails !== false; // default true
 
     const token = await getUserAccessToken(env);
 
-    // 1) Get playlists for the authorized user
-    const playlists = await fetchAllMyPlaylists(token);
+    let playlists = [];
 
-    // 2) For each playlist, fetch items + normalize
-    const normalized = [];
-    for (const p of playlists) {
-      const items = await fetchAllPlaylistItems(token, p.id);
-      normalized.push(normalizePlaylist(p, items, lastScanAt));
+    if (playlistId) {
+      // One-playlist mode (recommended)
+      const p = await fetchPlaylist(token, playlistId);
+      const items = await fetchPlaylistItemsBounded(token, playlistId, maxTracksPerPlaylist);
+      playlists = [normalizePlaylist(p, items, lastScanAt, includeTrackDetails)];
+    } else {
+      // Multi-playlist mode (bounded)
+      const all = await fetchMyPlaylists(token, maxPlaylists);
+      // Fetch tracks with small concurrency to avoid spiking duration
+      playlists = await mapWithConcurrency(all, 3, async (p) => {
+        const items = await fetchPlaylistItemsBounded(token, p.id, maxTracksPerPlaylist);
+        return normalizePlaylist(p, items, lastScanAt, includeTrackDetails);
+      });
     }
 
-    const totalNewTracks = normalized.reduce(
-      (sum, p) => sum + (p.newTracksCount || 0),
-      0
+    const totalNewTracks = playlists.reduce((sum, p) => sum + (p.newTracksCount || 0), 0);
+
+    return json(
+      {
+        lastUpdated: new Date().toISOString(),
+        totalPlaylists: playlists.length,
+        totalNewTracks,
+        playlists
+      },
+      200
     );
-
-    const snapshot = {
-      lastUpdated: new Date().toISOString(),
-      totalPlaylists: normalized.length,
-      totalNewTracks,
-      playlists: normalized
-    };
-
-    return json(snapshot, 200);
   } catch (err) {
-    console.error(err);
+    // Always return useful JSON so you don't need logs
     return json(
       {
         error: "Refresh failed",
@@ -51,13 +64,10 @@ export async function onRequestPost(context) {
   }
 }
 
-/**
- * Uses refresh token -> access token (user-scoped).
- * Requires secrets:
- *  - SPOTIFY_PROFILE (client id)
- *  - SPOTIFY_KEY (client secret)
- *  - SPOTIFY_REFRESH_TOKEN (refresh token)
- */
+/* ---------------------------
+   Token
+--------------------------- */
+
 async function getUserAccessToken(env) {
   const clientId = env.SPOTIFY_PROFILE;
   const clientSecret = env.SPOTIFY_KEY;
@@ -87,80 +97,109 @@ async function getUserAccessToken(env) {
   try { data = JSON.parse(text); } catch {}
 
   if (!res.ok) {
-    // Spotify often returns: { error, error_description }
-    throw new Error(data?.error_description || data?.error || `Token refresh failed: ${res.status} ${text}`);
+    throw new Error(`Token refresh failed (${res.status}): ${data?.error_description || data?.error || text}`);
   }
-
   if (!data?.access_token) {
     throw new Error("Token refresh succeeded but no access_token returned");
   }
-
   return data.access_token;
 }
 
-async function fetchAllMyPlaylists(token) {
-  let items = [];
-  let next = "https://api.spotify.com/v1/me/playlists?limit=50";
+/* ---------------------------
+   Spotify API calls
+--------------------------- */
 
-  while (next) {
+async function fetchMyPlaylists(token, limit) {
+  // We page until we reach limit
+  let items = [];
+  let next = `https://api.spotify.com/v1/me/playlists?limit=50`;
+
+  while (next && items.length < limit) {
     const res = await fetch(next, {
       headers: { Authorization: `Bearer ${token}` }
     });
 
-    const text = await safeText(res);
-    let data = null;
-    try { data = JSON.parse(text); } catch {}
+    const { ok, text, json } = await readJsonOrText(res);
 
-    if (!res.ok) {
-      throw new Error(`My playlists fetch failed: ${res.status} ${text}`);
+    if (!ok) {
+      throw new Error(`My playlists fetch failed (${res.status}): ${text}`);
     }
 
-    items = items.concat(data?.items || []);
-    next = data?.next;
+    items = items.concat(json?.items || []);
+    next = json?.next || null;
   }
 
-  return items;
+  return items.slice(0, limit);
 }
 
-async function fetchAllPlaylistItems(token, playlistId) {
-  let items = [];
-  let next = `https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=100&market=from_token`;
+async function fetchPlaylist(token, playlistId) {
+  const url = `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
 
-  while (next) {
+  const { ok, text, json } = await readJsonOrText(res);
+  if (!ok) throw new Error(`Playlist fetch failed (${res.status}): ${text}`);
+  return json;
+}
+
+async function fetchPlaylistItemsBounded(token, playlistId, maxItems) {
+  // Bounded: only fetch enough pages to reach maxItems
+  let items = [];
+  let next = `https://api.spotify.com/v1/playlists/${encodeURIComponent(
+    playlistId
+  )}/tracks?limit=100`;
+
+  while (next && items.length < maxItems) {
     const res = await fetch(next, {
       headers: { Authorization: `Bearer ${token}` }
     });
 
-    const text = await safeText(res);
-    let data = null;
-    try { data = JSON.parse(text); } catch {}
+    const { ok, text, json } = await readJsonOrText(res);
 
-    if (!res.ok) {
-      throw new Error(`Playlist items fetch failed (${playlistId}): ${res.status} ${text}`);
+    if (!ok) {
+      throw new Error(`Playlist items failed (${playlistId}) (${res.status}): ${text}`);
     }
 
-    items = items.concat(data?.items || []);
-    next = data?.next;
+    items = items.concat(json?.items || []);
+    next = json?.next || null;
   }
 
-  return items;
+  return items.slice(0, maxItems);
 }
 
-// NOTE: Spotify returns items under it.track even when it is an "episode"
-function normalizePlaylist(playlist, rawItems, lastScanAtIso) {
+/* ---------------------------
+   Normalization
+--------------------------- */
+
+function normalizePlaylist(playlist, rawItems, lastScanAtIso, includeTrackDetails) {
   const lastScanAt = lastScanAtIso ? new Date(lastScanAtIso) : null;
 
   const newItems = [];
 
   for (const it of rawItems) {
     const addedAt = it.added_at ? new Date(it.added_at) : null;
-    if (lastScanAt && addedAt && !isNaN(addedAt.getTime()) && addedAt <= lastScanAt) continue;
 
-    const obj = it.track; // track OR episode object
+    if (
+      lastScanAt &&
+      addedAt &&
+      !isNaN(addedAt.getTime()) &&
+      addedAt <= lastScanAt
+    ) {
+      continue;
+    }
+
+    const obj = it.track; // track OR episode
     if (!obj) continue;
 
     const type = obj.type; // "track" or "episode"
     const url = obj.external_urls?.spotify || null;
+
+    if (!includeTrackDetails) {
+      // lightweight mode
+      newItems.push({ type, id: obj.id, url, addedAt: it.added_at });
+      continue;
+    }
 
     if (type === "track") {
       newItems.push({
@@ -194,12 +233,15 @@ function normalizePlaylist(playlist, rawItems, lastScanAtIso) {
   };
 }
 
+/* ---------------------------
+   Helpers
+--------------------------- */
+
 function json(obj, status = 200) {
-  return new Response(JSON.stringify(obj), {
+  return new Response(JSON.stringify(obj, null, 2), {
     status,
     headers: {
       "Content-Type": "application/json; charset=utf-8",
-      // Same-origin in Pages, but CORS headers don't hurt
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type,Accept"
@@ -219,9 +261,36 @@ export async function onRequestOptions() {
 }
 
 async function safeText(res) {
-  try {
-    return await res.text();
-  } catch {
-    return "";
+  try { return await res.text(); } catch { return ""; }
+}
+
+async function readJsonOrText(res) {
+  const text = await safeText(res);
+  let json = null;
+  try { json = JSON.parse(text); } catch {}
+  return { ok: res.ok, text, json };
+}
+
+function clampInt(v, min, max, fallback) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.floor(n)));
+}
+
+async function mapWithConcurrency(list, concurrency, fn) {
+  const out = new Array(list.length);
+  let i = 0;
+
+  async function worker() {
+    while (true) {
+      const idx = i++;
+      if (idx >= list.length) return;
+      out[idx] = await fn(list[idx], idx);
+    }
   }
+
+  const workers = [];
+  for (let w = 0; w < concurrency; w++) workers.push(worker());
+  await Promise.all(workers);
+  return out;
 }
