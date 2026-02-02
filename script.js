@@ -47,48 +47,79 @@
 
   function buildShell() {
     if (!appMain) return;
+
     appMain.innerHTML = `
       <p class="status" id="statusMessage"></p>
 
       <div class="app-grid">
-        <section class="panel" id="leftPanel">
+        <!-- LEFT: LIBRARY STATS -->
+        <section class="panel">
           <div class="panel-header">
             <h2 class="panel-title">Library</h2>
           </div>
           <div class="panel-body">
             <div class="summary-grid" id="summaryGrid"></div>
-            <div style="height:12px"></div>
-            <div class="accordion" id="accordion"></div>
           </div>
         </section>
 
-        <section class="panel" id="centerPanel">
-          <div class="panel-body detail-empty" id="detailEmpty">
-            Click a playlist to view songs.
-          </div>
+        <!-- MIDDLE: SECTIONS + PLAYLIST LIST -->
+        <section class="panel">
+          <div class="panel-body section-pills" id="sectionPills"></div>
 
-          <div id="detailView" style="display:none">
-            <div class="detail-head">
-              <img class="detail-thumb" id="detailThumb" alt="">
-              <div style="min-width:0">
-                <h3 class="detail-title" id="detailTitle"></h3>
-                <p class="detail-sub" id="detailSub"></p>
-              </div>
+          <div class="panel" style="margin:14px; margin-top:12px; overflow:hidden;">
+            <div class="list-header">
+              <div class="title">Playlists</div>
+              <div class="count" id="playlistCount">–</div>
             </div>
-            <ul class="tracklist" id="tracklist"></ul>
+            <div class="cards" id="playlistCards"></div>
           </div>
         </section>
 
-        <aside class="panel" id="rightPanel">
+        <!-- RIGHT: OTHERS -->
+        <aside class="panel">
           <div class="panel-header">
             <h2 class="panel-title">Others playlists</h2>
           </div>
           <div class="panel-body">
-            <div class="menu" id="othersMenu"></div>
+            <div class="cards" id="othersCards" style="max-height:64vh; overflow:auto; padding:0;"></div>
           </div>
         </aside>
       </div>
+
+      <!-- MODAL -->
+      <div class="modal-backdrop" id="modalBackdrop" aria-hidden="true">
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+          <div class="modal-top">
+            <h3 class="modal-title" id="modalTitle">Playlist</h3>
+            <button class="modal-close" id="modalCloseBtn" type="button">Close</button>
+          </div>
+
+          <div class="detail-head">
+            <img class="detail-thumb" id="detailThumb" alt="">
+            <div style="min-width:0">
+              <h3 class="detail-title" id="detailTitle"></h3>
+              <p class="detail-sub" id="detailSub"></p>
+            </div>
+          </div>
+
+          <ul class="tracklist" id="tracklist"></ul>
+        </div>
+      </div>
     `;
+
+    // modal close handlers
+    const backdrop = document.getElementById("modalBackdrop");
+    const closeBtn = document.getElementById("modalCloseBtn");
+    if (closeBtn) closeBtn.addEventListener("click", closeModal);
+    if (backdrop) {
+      backdrop.addEventListener("click", (e) => {
+        if (e.target === backdrop) closeModal();
+      });
+    }
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") closeModal();
+    });
   }
 
   function setStatus(msg) {
@@ -113,40 +144,20 @@
     `;
   }
 
-  function makeAcc(label, playlists, openByDefault) {
-    const wrap = document.createElement("div");
-    wrap.className = `acc ${openByDefault ? "open" : ""}`;
-
-    wrap.innerHTML = `
-      <button type="button">
-        <div>${escapeHtml(label)}</div>
-        <span>${playlists.length}</span>
-      </button>
-      <div class="acc-body">
-        <div class="cards">
-          ${playlists.map(cardHtml).join("")}
-        </div>
-      </div>
-    `;
-
-    wrap.querySelector("button").addEventListener("click", () => {
-      wrap.classList.toggle("open");
-    });
-
-    return wrap;
-  }
-
   function renderSnapshot(data) {
     const totals = data?.totals || {};
     const sections = data?.sections || {};
     const othersPlaylists = Array.isArray(data?.othersPlaylists) ? data.othersPlaylists : [];
 
     const summaryGrid = document.getElementById("summaryGrid");
-    const accordion = document.getElementById("accordion");
-    const othersMenu = document.getElementById("othersMenu");
+    const sectionPills = document.getElementById("sectionPills");
+    const playlistCards = document.getElementById("playlistCards");
+    const playlistCount = document.getElementById("playlistCount");
+    const othersCards = document.getElementById("othersCards");
 
-    if (!summaryGrid || !accordion || !othersMenu) return;
+    if (!summaryGrid || !sectionPills || !playlistCards || !playlistCount || !othersCards) return;
 
+    // LEFT: stats (no “new tracks”; all metrics)
     summaryGrid.innerHTML = `
       <div class="summary-card"><h2>Total playlists</h2><p class="summary-value">${totals.playlists ?? "–"}</p></div>
       <div class="summary-card"><h2>Total songs</h2><p class="summary-value">${totals.songs ?? "–"}</p></div>
@@ -156,15 +167,26 @@
       <div class="summary-card"><h2>Last updated</h2><p class="summary-value">${fmtDate(data.lastUpdated)}</p></div>
     `;
 
-    accordion.innerHTML = "";
-    accordion.appendChild(makeAcc("Playlists", [...(sections.dailyMix||[]), ...(sections.top||[]), ...(sections.other||[])], true));
-    accordion.appendChild(makeAcc("Daily Mix", sections.dailyMix || [], false));
-    accordion.appendChild(makeAcc("Top", sections.top || [], false));
-    accordion.appendChild(makeAcc("Other", sections.other || [], false));
+    // MIDDLE: pills (Daily Mix / Top / Other counts)
+    const dailyMix = sections.dailyMix || [];
+    const top = sections.top || [];
+    const other = sections.other || [];
 
-    othersMenu.innerHTML = othersPlaylists.length
+    sectionPills.innerHTML = `
+      <div class="pill"><div>Daily Mix</div><span>${dailyMix.length}</span></div>
+      <div class="pill"><div>Top</div><span>${top.length}</span></div>
+      <div class="pill"><div>Other</div><span>${other.length}</span></div>
+    `;
+
+    // MIDDLE: full playlist list (same as screenshot — default open)
+    const allPlaylists = [...dailyMix, ...top, ...other];
+    playlistCards.innerHTML = allPlaylists.map(cardHtml).join("");
+    playlistCount.textContent = String(allPlaylists.length);
+
+    // RIGHT: others playlists (manual allowlist only)
+    othersCards.innerHTML = othersPlaylists.length
       ? othersPlaylists.map(cardHtml).join("")
-      : `<div style="color:var(--muted);font-size:.9rem">No “others” playlists have been added yet.</div>`;
+      : `<div style="padding:12px 14px;color:var(--muted);font-size:.9rem">No “others” playlists have been added yet.</div>`;
 
     wireCardClicks();
     setStatus("");
@@ -175,22 +197,42 @@
       el.addEventListener("click", async () => {
         const id = el.getAttribute("data-playlist-id");
         if (!id) return;
-        await openPlaylist(id);
+        await openPlaylistModal(id);
       });
     });
   }
 
-  async function openPlaylist(playlistId) {
-    setStatus("Loading playlist…");
+  function openModal() {
+    const backdrop = document.getElementById("modalBackdrop");
+    if (!backdrop) return;
+    backdrop.classList.add("open");
+    backdrop.setAttribute("aria-hidden", "false");
+  }
 
-    const detailEmpty = document.getElementById("detailEmpty");
-    const detailView = document.getElementById("detailView");
+  function closeModal() {
+    const backdrop = document.getElementById("modalBackdrop");
+    if (!backdrop) return;
+    backdrop.classList.remove("open");
+    backdrop.setAttribute("aria-hidden", "true");
+  }
+
+  async function openPlaylistModal(playlistId) {
+    setStatus("Loading playlist…");
+    openModal();
+
     const detailThumb = document.getElementById("detailThumb");
     const detailTitle = document.getElementById("detailTitle");
     const detailSub = document.getElementById("detailSub");
     const tracklist = document.getElementById("tracklist");
+    const modalTitle = document.getElementById("modalTitle");
 
-    if (!detailEmpty || !detailView || !detailThumb || !detailTitle || !detailSub || !tracklist) return;
+    if (!detailThumb || !detailTitle || !detailSub || !tracklist || !modalTitle) return;
+
+    // quick reset
+    detailThumb.src = "https://spotify.jdge.cc/images/spotify_logo.png";
+    detailTitle.textContent = "Loading…";
+    detailSub.textContent = "";
+    tracklist.innerHTML = "";
 
     try {
       const res = await fetch(API_PLAYLIST, {
@@ -211,6 +253,7 @@
       const p = data.playlist || {};
       const items = Array.isArray(data.items) ? data.items : [];
 
+      modalTitle.textContent = "Playlist";
       detailThumb.src = p.image || "https://spotify.jdge.cc/images/spotify_logo.png";
       detailTitle.textContent = p.name || "Untitled playlist";
 
@@ -220,13 +263,11 @@
       detailSub.textContent = infoBits.join(" • ");
 
       tracklist.innerHTML = items.map(renderTrack).join("");
-
-      detailEmpty.style.display = "none";
-      detailView.style.display = "block";
       setStatus("");
     } catch (err) {
       console.error(err);
       setStatus(`Playlist load failed: ${String(err.message || err)}`);
+      tracklist.innerHTML = `<li class="track"><div class="track-main"><div class="track-name">Failed to load playlist</div><div class="track-meta">${escapeHtml(String(err.message || err))}</div></div></li>`;
     }
   }
 
