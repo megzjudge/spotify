@@ -1,261 +1,289 @@
 // script.js
 (() => {
-  // Point this to your Worker
-  const WORKER_BASE_URL = 'https://restless-breeze-4929.touch-97a.workers.dev';
+  /***********************
+   * CONFIG
+   ***********************/
+  // Cloudflare Pages Functions are same-origin, so no base URL.
+  const API_REFRESH = "/api/refresh"; // POST -> returns latest snapshot JSON
 
-  const refreshButton = document.getElementById('refreshButton');
-  const statusMessage = document.getElementById('statusMessage');
-  const summarySection = document.getElementById('summarySection');
-  const playlistsContainer = document.getElementById('playlistsContainer');
-  const noChangesSection = document.getElementById('noChangesSection');
+  // Local storage key (client-side cache only)
+  const LS_KEY = "spotify_snapshot_v1";
 
-  const totalPlaylistsEl = document.getElementById('totalPlaylists');
-  const totalNewTracksEl = document.getElementById('totalNewTracks');
-  const lastUpdatedEl = document.getElementById('lastUpdated');
+  /***********************
+   * DOM
+   ***********************/
+  const refreshButton = document.getElementById("refreshButton");
+  const statusMessage = document.getElementById("statusMessage");
+  const summarySection = document.getElementById("summarySection");
+  const playlistsContainer = document.getElementById("playlistsContainer");
+  const noChangesSection = document.getElementById("noChangesSection");
 
-  const topsSection = document.getElementById('topsSection');
-  const topArtistsList = document.getElementById('topArtistsList');
-  const topTracksList = document.getElementById('topTracksList');
+  const totalPlaylistsEl = document.getElementById("totalPlaylists");
+  const totalNewTracksEl = document.getElementById("totalNewTracks");
+  const lastUpdatedEl = document.getElementById("lastUpdated");
 
+  const topsSection = document.getElementById("topsSection");
+  const topArtistsList = document.getElementById("topArtistsList");
+  const topTracksList = document.getElementById("topTracksList");
+
+  /***********************
+   * UI helpers
+   ***********************/
   function setButtonLoading(isLoading) {
     if (!refreshButton) return;
     refreshButton.disabled = isLoading;
-    refreshButton.classList.toggle('is-loading', isLoading);
+    refreshButton.classList.toggle("is-loading", isLoading);
   }
 
-  async function fetchSummary({ refresh } = { refresh: false }) {
-    const endpoint = refresh ? '/api/refresh' : '/api/summary';
+  function setBlankState() {
+    // Page is intentionally "blank" until user clicks refresh
+    if (statusMessage) {
+      statusMessage.textContent = "Click “Refresh from Spotify” to pull the latest playlist data.";
+    }
+    if (summarySection) summarySection.hidden = true;
+    if (noChangesSection) noChangesSection.hidden = true;
+    if (playlistsContainer) playlistsContainer.innerHTML = "";
+    if (topsSection) topsSection.hidden = true;
 
-    setButtonLoading(refresh);
+    if (totalPlaylistsEl) totalPlaylistsEl.textContent = "–";
+    if (totalNewTracksEl) totalNewTracksEl.textContent = "–";
+    if (lastUpdatedEl) lastUpdatedEl.textContent = "Not yet run";
+  }
+
+  function setErrorState(message) {
+    if (statusMessage) statusMessage.textContent = message;
+    if (summarySection) summarySection.hidden = true;
+    if (noChangesSection) noChangesSection.hidden = true;
+    if (playlistsContainer) playlistsContainer.innerHTML = "";
+    if (topsSection) topsSection.hidden = true;
+  }
+
+  /***********************
+   * Storage
+   ***********************/
+  function saveSnapshot(data) {
+    try {
+      localStorage.setItem(LS_KEY, JSON.stringify(data));
+    } catch (e) {
+      // Ignore storage failures (private mode, quota, etc.)
+      console.warn("Failed to save snapshot to localStorage", e);
+    }
+  }
+
+  /***********************
+   * API
+   ***********************/
+  async function refreshFromSpotify() {
+    setButtonLoading(true);
+
+    if (statusMessage) statusMessage.textContent = "Refreshing from Spotify…";
+    if (noChangesSection) noChangesSection.hidden = true;
 
     try {
-      if (statusMessage) {
-        statusMessage.textContent = refresh
-          ? 'Refreshing from Spotify…'
-          : 'Loading latest snapshot…';
-      }
-
-      const response = await fetch(WORKER_BASE_URL + endpoint, {
-        method: refresh ? 'POST' : 'GET',
+      const res = await fetch(API_REFRESH, {
+        method: "POST",
         headers: {
-          Accept: 'application/json'
+          Accept: "application/json"
         }
       });
 
-      if (!response.ok) {
-        throw new Error(`Request failed with status ${response.status}`);
+      // Try to parse JSON either way for better error reporting
+      const text = await res.text();
+      let data = null;
+      try {
+        data = text ? JSON.parse(text) : null;
+      } catch {
+        data = null;
       }
 
-      const data = await response.json();
+      if (!res.ok) {
+        const msg =
+          (data && (data.error || data.message)) ||
+          `Request failed with status ${res.status}`;
+        throw new Error(msg);
+      }
+
+      if (!data) {
+        throw new Error("No JSON returned from /api/refresh");
+      }
+
+      saveSnapshot(data);
       renderData(data);
     } catch (err) {
       console.error(err);
-      if (statusMessage) {
-        statusMessage.textContent =
-          'Something went wrong talking to the worker. Please try again in a moment.';
-      }
-      if (summarySection) summarySection.hidden = true;
-      if (playlistsContainer) playlistsContainer.innerHTML = '';
-      if (noChangesSection) noChangesSection.hidden = true;
+      setErrorState(
+        "Couldn’t refresh from Spotify. Check your Pages Function logs and try again."
+      );
     } finally {
       setButtonLoading(false);
     }
   }
 
+  /***********************
+   * Rendering
+   ***********************/
   function renderData(data) {
     if (!data) {
-      if (statusMessage) {
-        statusMessage.textContent =
-          'No data in storage yet. Use “Refresh from Spotify” to run the first scan.';
-      }
-      if (summarySection) summarySection.hidden = true;
-      if (playlistsContainer) playlistsContainer.innerHTML = '';
-      if (noChangesSection) noChangesSection.hidden = true;
+      setBlankState();
       return;
     }
 
-    const {
-      lastUpdated,
-      totalPlaylists,
-      totalNewTracks,
-      playlists = []
-    } = data;
+    // Accept either direct fields or nested payloads; be tolerant.
+    const payload = data.data && typeof data.data === "object" ? data.data : data;
+
+    const playlists = Array.isArray(payload.playlists) ? payload.playlists : [];
+    const lastUpdated = payload.lastUpdated || payload.updatedAt || payload.timestamp || null;
+
+    // If totals not provided, compute best-effort.
+    const totalPlaylists =
+      typeof payload.totalPlaylists === "number" ? payload.totalPlaylists : playlists.length;
+
+    const totalNewTracks =
+      typeof payload.totalNewTracks === "number"
+        ? payload.totalNewTracks
+        : playlists.reduce((sum, p) => {
+            const c =
+              typeof p?.newTracksCount === "number"
+                ? p.newTracksCount
+                : Array.isArray(p?.newTracks)
+                  ? p.newTracks.length
+                  : 0;
+            return sum + c;
+          }, 0);
 
     if (summarySection) summarySection.hidden = false;
 
-    if (totalPlaylistsEl) {
-      totalPlaylistsEl.textContent =
-        typeof totalPlaylists === 'number' ? String(totalPlaylists) : '–';
-    }
-    if (totalNewTracksEl) {
-      totalNewTracksEl.textContent =
-        typeof totalNewTracks === 'number' ? String(totalNewTracks) : '–';
-    }
+    if (totalPlaylistsEl) totalPlaylistsEl.textContent = String(totalPlaylists);
+    if (totalNewTracksEl) totalNewTracksEl.textContent = String(totalNewTracks);
 
     if (lastUpdatedEl) {
       if (lastUpdated) {
         const d = new Date(lastUpdated);
         lastUpdatedEl.textContent = isNaN(d.getTime())
-          ? lastUpdated
+          ? String(lastUpdated)
           : d.toLocaleString(undefined, {
-              year: 'numeric',
-              month: 'short',
-              day: 'numeric',
-              hour: '2-digit',
-              minute: '2-digit'
+              year: "numeric",
+              month: "short",
+              day: "numeric",
+              hour: "2-digit",
+              minute: "2-digit"
             });
       } else {
-        lastUpdatedEl.textContent = 'Not yet run';
+        lastUpdatedEl.textContent = "Not yet run";
       }
     }
 
+    if (!playlistsContainer) return;
+    playlistsContainer.innerHTML = "";
+
+    // Only show playlists that actually have new tracks
     const playlistsWithNew = playlists.filter(
       (p) => (p.newTracksCount || (p.newTracks && p.newTracks.length)) > 0
     );
 
-    if (!playlistsContainer) return;
-
-    playlistsContainer.innerHTML = '';
-
     if (!playlistsWithNew.length) {
-      if (statusMessage) {
-        statusMessage.textContent = 'Up to date.';
-      }
+      if (statusMessage) statusMessage.textContent = "Up to date.";
       if (noChangesSection) noChangesSection.hidden = false;
-      return;
-    }
+    } else {
+      if (statusMessage) statusMessage.textContent = "Here are the playlists with new songs:";
+      if (noChangesSection) noChangesSection.hidden = true;
 
-    if (noChangesSection) noChangesSection.hidden = true;
-    if (statusMessage) {
-      statusMessage.textContent = 'Here are the playlists with new songs:';
-    }
+      playlistsWithNew.forEach((playlist) => {
+        const card = document.createElement("article");
+        card.className = "playlist-card";
 
-    playlistsWithNew.forEach((playlist) => {
-      const card = document.createElement('article');
-      card.className = 'playlist-card';
+        const playlistUrl =
+          playlist.url ||
+          (playlist.id ? `https://open.spotify.com/playlist/${playlist.id}` : "#");
 
-      const playlistUrl =
-        playlist.url ||
-        (playlist.id
-          ? `https://open.spotify.com/playlist/${playlist.id}`
-          : '#');
+        const imageUrl =
+          playlist.image || "https://spotify.jdge.cc/images/spotify_logo.png";
 
-      const imageUrl =
-        playlist.image || 'https://spotify.jdge.cc/images/spotify_logo.png';
+        const newTracks = Array.isArray(playlist.newTracks) ? playlist.newTracks : [];
+        const newCount =
+          typeof playlist.newTracksCount === "number" ? playlist.newTracksCount : newTracks.length;
 
-      const newTracks = playlist.newTracks || [];
-      const newCount = playlist.newTracksCount || newTracks.length;
+        const tracksListHtml =
+          newTracks.length > 0
+            ? `<ul class="tracks-list">
+                ${newTracks
+                  .map((track) => {
+                    const artists = Array.isArray(track.artists)
+                      ? track.artists.join(", ")
+                      : track.artists || "";
+                    const trackUrl =
+                      track.url ||
+                      (track.id ? `https://open.spotify.com/track/${track.id}` : "#");
+                    const addedDate = track.addedAt ? new Date(track.addedAt) : null;
+                    const addedLabel =
+                      addedDate && !isNaN(addedDate.getTime())
+                        ? addedDate.toLocaleDateString(undefined, {
+                            year: "numeric",
+                            month: "short",
+                            day: "numeric"
+                          })
+                        : "";
 
-      const tracksListHtml =
-        newTracks.length > 0
-          ? `<ul class="tracks-list">
-              ${newTracks
-                .map((track) => {
-                  const artists = Array.isArray(track.artists)
-                    ? track.artists.join(', ')
-                    : track.artists || '';
-                  const trackUrl =
-                    track.url ||
-                    (track.id
-                      ? `https://open.spotify.com/track/${track.id}`
-                      : '#');
-                  const addedDate = track.addedAt
-                    ? new Date(track.addedAt)
-                    : null;
-                  const addedLabel =
-                    addedDate && !isNaN(addedDate.getTime())
-                      ? addedDate.toLocaleDateString(undefined, {
-                          year: 'numeric',
-                          month: 'short',
-                          day: 'numeric'
-                        })
-                      : '';
-
-                  return `
-                    <li class="track">
-                      <div class="track-main">
-                        <a href="${trackUrl}" target="_blank" rel="noopener noreferrer" class="track-title">
-                          ${escapeHtml(track.name || 'Untitled track')}
-                        </a>
+                    return `
+                      <li class="track">
+                        <div class="track-main">
+                          <a href="${trackUrl}" target="_blank" rel="noopener noreferrer" class="track-title">
+                            ${escapeHtml(track.name || "Untitled track")}
+                          </a>
+                          ${
+                            artists
+                              ? `<span class="track-artists">${escapeHtml(artists)}</span>`
+                              : ""
+                          }
+                        </div>
                         ${
-                          artists
-                            ? `<span class="track-artists">${escapeHtml(
-                                artists
-                              )}</span>`
-                            : ''
+                          addedLabel
+                            ? `<span class="track-added">Added ${addedLabel}</span>`
+                            : ""
                         }
-                      </div>
-                      ${
-                        addedLabel
-                          ? `<span class="track-added">Added ${addedLabel}</span>`
-                          : ''
-                      }
-                    </li>
-                  `;
-                })
-                .join('')}
-            </ul>`
-          : '<p class="muted">Track details not available for this playlist.</p>';
+                      </li>
+                    `;
+                  })
+                  .join("")}
+              </ul>`
+            : '<p class="muted">Track details not available for this playlist.</p>';
 
-      card.innerHTML = `
-        <div class="playlist-header">
-          <img src="${imageUrl}" alt="" class="playlist-image" loading="lazy">
-          <div class="playlist-meta">
-            <a href="${playlistUrl}" target="_blank" rel="noopener noreferrer" class="playlist-name">
-              ${escapeHtml(playlist.name || 'Untitled playlist')}
-            </a>
-            <div class="playlist-meta-row">
-              ${
-                typeof playlist.totalTracks === 'number'
-                  ? `<span>${playlist.totalTracks} total tracks</span>`
-                  : ''
-              }
-              ${
-                newCount
-                  ? `<span class="badge badge-new">${newCount} new ${
-                      newCount === 1 ? 'song' : 'songs'
-                    }</span>`
-                  : ''
-              }
+        card.innerHTML = `
+          <div class="playlist-header">
+            <img src="${imageUrl}" alt="" class="playlist-image" loading="lazy">
+            <div class="playlist-meta">
+              <a href="${playlistUrl}" target="_blank" rel="noopener noreferrer" class="playlist-name">
+                ${escapeHtml(playlist.name || "Untitled playlist")}
+              </a>
+              <div class="playlist-meta-row">
+                ${
+                  typeof playlist.totalTracks === "number"
+                    ? `<span>${playlist.totalTracks} total tracks</span>`
+                    : ""
+                }
+                ${
+                  newCount
+                    ? `<span class="badge badge-new">${newCount} new ${
+                        newCount === 1 ? "song" : "songs"
+                      }</span>`
+                    : ""
+                }
+              </div>
             </div>
           </div>
-        </div>
-        ${tracksListHtml}
-      `;
+          ${tracksListHtml}
+        `;
 
-      playlistsContainer.appendChild(card);
-    });
-  }
-
-  async function fetchTop() {
-    if (!topsSection || !topArtistsList || !topTracksList) {
-      return;
-    }
-
-    try {
-      const response = await fetch(WORKER_BASE_URL + '/api/top', {
-        method: 'GET',
-        headers: {
-          Accept: 'application/json'
-        }
+        playlistsContainer.appendChild(card);
       });
-
-      if (!response.ok) {
-        throw new Error(`Top request failed with status ${response.status}`);
-      }
-
-      const data = await response.json();
-      renderTop(data);
-    } catch (err) {
-      console.error(err);
-      topsSection.hidden = true;
     }
+
+    // Tops are optional; only render if present in payload
+    renderTop(payload.top || payload.tops || payload);
   }
 
   function renderTop(data) {
-    if (!data || !topsSection || !topArtistsList || !topTracksList) {
-      return;
-    }
+    if (!topsSection || !topArtistsList || !topTracksList) return;
 
     const artists = Array.isArray(data.artists) ? data.artists : [];
     const tracks = Array.isArray(data.tracks) ? data.tracks : [];
@@ -269,74 +297,66 @@
 
     topArtistsList.innerHTML = artists
       .map((a) => {
-        const img = a.image || 'https://spotify.jdge.cc/images/spotify_logo.png';
-        const genres = (a.genres || []).slice(0, 2).join(', ');
-        const subtitle =
-          genres || (a.followers ? `${a.followers.toLocaleString()} followers` : '');
-        const url = a.url || '#';
+        const img = a.image || "https://spotify.jdge.cc/images/spotify_logo.png";
+        const genres = (a.genres || []).slice(0, 2).join(", ");
+        const subtitle = genres || (a.followers ? `${Number(a.followers).toLocaleString()} followers` : "");
+        const url = a.url || "#";
 
         return `
           <li class="tops-item">
             <img src="${img}" alt="" class="tops-avatar" loading="lazy">
             <div class="tops-body">
               <a href="${url}" target="_blank" rel="noopener noreferrer" class="tops-title">
-                ${escapeHtml(a.name || 'Unknown artist')}
+                ${escapeHtml(a.name || "Unknown artist")}
               </a>
-              ${
-                subtitle
-                  ? `<span class="tops-subtitle">${escapeHtml(subtitle)}</span>`
-                  : ''
-              }
+              ${subtitle ? `<span class="tops-subtitle">${escapeHtml(subtitle)}</span>` : ""}
             </div>
           </li>
         `;
       })
-      .join('');
+      .join("");
 
     topTracksList.innerHTML = tracks
       .map((t) => {
-        const img =
-          t.albumImage || 'https://spotify.jdge.cc/images/spotify_logo.png';
-        const artists = (t.artists || []).join(', ');
-        const subtitle = artists || t.album || '';
-        const url = t.url || '#';
+        const img = t.albumImage || "https://spotify.jdge.cc/images/spotify_logo.png";
+        const artistsStr = (t.artists || []).join(", ");
+        const subtitle = artistsStr || t.album || "";
+        const url = t.url || "#";
 
         return `
           <li class="tops-item">
             <img src="${img}" alt="" class="tops-avatar" loading="lazy">
             <div class="tops-body">
               <a href="${url}" target="_blank" rel="noopener noreferrer" class="tops-title">
-                ${escapeHtml(t.name || 'Unknown track')}
+                ${escapeHtml(t.name || "Unknown track")}
               </a>
-              ${
-                subtitle
-                  ? `<span class="tops-subtitle">${escapeHtml(subtitle)}</span>`
-                  : ''
-              }
+              ${subtitle ? `<span class="tops-subtitle">${escapeHtml(subtitle)}</span>` : ""}
             </div>
           </li>
         `;
       })
-      .join('');
+      .join("");
   }
 
   function escapeHtml(str) {
     return String(str)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
   }
 
-  document.addEventListener('DOMContentLoaded', () => {
-    if (refreshButton) {
-      refreshButton.addEventListener('click', () =>
-        fetchSummary({ refresh: true })
-      );
-    }
+  /***********************
+   * Boot
+   ***********************/
+  document.addEventListener("DOMContentLoaded", () => {
+    setBlankState();
 
-    fetchSummary({ refresh: false });
-    fetchTop();
+    if (refreshButton) {
+      refreshButton.addEventListener("click", () => {
+        refreshFromSpotify();
+      });
+    }
   });
 })();
