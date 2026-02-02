@@ -5,10 +5,8 @@
   const API_REFRESH = "/api/refresh";
   const API_PLAYLIST = "/api/playlist";
 
-  // Your podcast playlist (private is fine — pulled via your server token)
   const PODCAST_PLAYLIST_ID = "2tHrihmpYzDbJ8rit7HtFR";
 
-  // Manually curated playlists NOT owned by you (you choose these)
   const OTHERS_PLAYLIST_IDS = [
     "71z6BdHlnfNj4DKRhuu1Fk",
     "7jYNznHoIYgJBzwT5jpoOe",
@@ -17,38 +15,31 @@
     "37i9dQZF1EQnsJ0xmvpihE"
   ];
 
-  // Year summary playlists (one per year; add more later)
   const YEAR_SUMMARY_PLAYLIST_IDS = [
-    "37i9dQZEVXcXHWVVT0lfDq" // 2025
+    "37i9dQZEVXcXHWVVT0lfDq"
   ];
 
-  // Limit how many items we display in the Podcast column to keep it snappy
   const PODCAST_COLUMN_LIMIT = 120;
 
   /***********************
    * DOM
    ***********************/
   const refreshButton = document.getElementById("refreshButton");
-  const appMain = document.getElementById("appMain"); // ensure <main id="appMain"></main>
+  const appMain = document.getElementById("appMain"); // make sure <main id="appMain"> exists
 
   /***********************
    * STATE
    ***********************/
-  let state = {
-    lastSnapshot: null,
-    filter: "all", // all | dailyMix | top | other
-    podcast: {
-      tried: false, // <- new: used to suppress the “refresh to load…” placeholder after refresh
-      playlist: null,
-      items: [],
-      error: null
-    },
+  const state = {
+    snapshot: null,
+    filter: "all",
     others: [],
-    yearSummary: []
+    yearSummary: [],
+    podcast: { tried: false, error: null, playlist: null, items: [] }
   };
 
   /***********************
-   * UTIL
+   * UI
    ***********************/
   function setButtonLoading(isLoading) {
     if (!refreshButton) return;
@@ -65,20 +56,17 @@
       .replace(/'/g, "&#39;");
   }
 
+  function fmtHoursFromMs(ms) {
+    const h = (Number(ms) || 0) / 3600000;
+    return `${h.toFixed(h >= 10 ? 0 : 1)}h`;
+  }
+
   function setStatus(msg) {
     const el = document.getElementById("statusMessage");
     if (!el) return;
     el.textContent = msg || "";
   }
 
-  function fmtHoursFromMs(ms) {
-    const h = (Number(ms) || 0) / 3600000;
-    return `${h.toFixed(h >= 10 ? 0 : 1)}h`;
-  }
-
-  /***********************
-   * BLANK UNTIL CLICK
-   ***********************/
   function blankUntilClick() {
     if (!appMain) return;
     appMain.innerHTML = `
@@ -88,9 +76,6 @@
     `;
   }
 
-  /***********************
-   * UI SHELL (layout like your screenshot)
-   ***********************/
   function buildShell() {
     if (!appMain) return;
 
@@ -99,38 +84,40 @@
 
       <div class="app-grid">
 
-        <!-- LEFT: STATISTICS + OTHERS (as its own block OUTSIDE stats) -->
-        <section class="panel" id="leftPanel">
-          <div class="panel-header">
-            <h2 class="panel-title">Statistics</h2>
-          </div>
+        <!-- LEFT COLUMN -->
+        <div class="col col-left">
 
-          <div class="panel-body">
-            <div class="stats-stack" id="statsStack"></div>
-          </div>
+          <section class="panel">
+            <div class="panel-header">
+              <h2 class="panel-title">Statistics</h2>
+            </div>
+            <div class="panel-body">
+              <div class="stats-grid" id="statsGrid"></div>
+            </div>
+          </section>
 
-          <div class="panel-body" style="padding-top:0;">
-            <div class="subpanel">
-              <div class="subpanel-header">
-                <div class="subpanel-title">Others playlists</div>
-              </div>
+          <section class="panel" style="margin-top:16px;">
+            <div class="panel-header">
+              <h2 class="panel-title">Others playlists</h2>
+            </div>
+            <div class="panel-body">
               <div class="cards cards-compact" id="othersCards"></div>
-            </div>
-          </div>
-        </section>
 
-        <!-- MIDDLE: FILTERS + YEAR SUMMARY + PLAYLISTS -->
-        <section class="panel" id="middlePanel">
-          <div class="panel-body">
-
-            <div class="filter-pills" id="filterPills"></div>
-
-            <div class="subpanel" style="margin-top:12px;">
-              <div class="subpanel-header">
-                <div class="subpanel-title">Year Summary Playlist</div>
+              <div class="subpanel" style="margin-top:14px;">
+                <div class="subpanel-header">
+                  <div class="subpanel-title">Year Summary Playlist</div>
+                </div>
+                <div class="cards cards-compact" id="yearSummaryCards"></div>
               </div>
-              <div class="cards cards-compact" id="yearSummaryCards"></div>
             </div>
+          </section>
+
+        </div>
+
+        <!-- MIDDLE COLUMN -->
+        <section class="panel col col-mid">
+          <div class="panel-body">
+            <div class="filter-pills" id="filterPills"></div>
 
             <div class="subpanel" style="margin-top:12px;">
               <div class="subpanel-header">
@@ -139,17 +126,16 @@
               </div>
               <div class="cards" id="playlistCards"></div>
             </div>
-
           </div>
         </section>
 
-        <!-- RIGHT: PODCAST EPISODES WATCHED -->
-        <aside class="panel" id="rightPanel">
+        <!-- RIGHT COLUMN -->
+        <aside class="panel col col-right">
           <div class="panel-header">
             <h2 class="panel-title">Podcast Episodes Watched</h2>
           </div>
-
           <div class="panel-body">
+
             <div class="podcast-head" id="podcastHead" hidden>
               <img class="podcast-thumb" id="podcastThumb" alt="">
               <div style="min-width:0">
@@ -158,12 +144,10 @@
               </div>
             </div>
 
-            <!-- Placeholder (only before first refresh) -->
             <div class="podcast-empty" id="podcastEmpty">
               Click refresh to load podcast episodes.
             </div>
 
-            <!-- Error (if refresh attempted but podcast load fails) -->
             <div class="podcast-error" id="podcastError" hidden></div>
 
             <ul class="podcast-list" id="podcastList"></ul>
@@ -193,7 +177,6 @@
       </div>
     `;
 
-    // modal close wiring
     const backdrop = document.getElementById("modalBackdrop");
     const closeBtn = document.getElementById("modalCloseBtn");
     if (closeBtn) closeBtn.addEventListener("click", closeModal);
@@ -208,7 +191,7 @@
   }
 
   /***********************
-   * RENDER HELPERS
+   * Cards
    ***********************/
   function cardHtml(p) {
     const img = p.image || "https://spotify.jdge.cc/images/spotify_logo.png";
@@ -235,64 +218,67 @@
     });
   }
 
-  /**
-   * STATISTICS (3 lines, no “last updated”)
-   * - Total playlists
-   * - Total songs + total song hours (exclude podcast playlist)
-   * - Podcast episodes + podcast hours (only podcast playlist)
-   *
-   * This expects your refresh payload to include totals like:
-   * totals.playlists
-   * totals.songs
-   * totals.songMs
-   * totals.podcastEpisodes
-   * totals.podcastMs
-   *
-   * If your backend doesn’t provide those yet, you’ll see “–”.
-   */
-  function renderStatisticsAndOthers() {
-    const data = state.lastSnapshot;
-    const totals = data?.totals || {};
+  /***********************
+   * Statistics rendering (your exact 3-line spec, but in card positions)
+   ***********************/
+  function renderStatistics() {
+    const grid = document.getElementById("statsGrid");
+    if (!grid) return;
 
-    const statsStack = document.getElementById("statsStack");
-    const othersCards = document.getElementById("othersCards");
-    if (!statsStack || !othersCards) return;
+    const totals = state.snapshot?.totals || {};
+    const playlists = totals.playlists ?? "–";
 
-    statsStack.innerHTML = `
-      <div class="stat-line">
-        <div class="stat-label">Total playlists</div>
-        <div class="stat-value">${totals.playlists ?? "–"}</div>
+    const songs = totals.songs ?? "–";
+    const songHours = typeof totals.songMs === "number" ? fmtHoursFromMs(totals.songMs) : "–";
+
+    const podEps = totals.podcastEpisodes ?? "–";
+    const podHours = typeof totals.podcastMs === "number" ? fmtHoursFromMs(totals.podcastMs) : "–";
+
+    grid.innerHTML = `
+      <div class="stat-card span-2">
+        <div class="stat-kicker">Total playlists</div>
+        <div class="stat-big">${escapeHtml(String(playlists))}</div>
       </div>
 
-      <div class="stat-line">
-        <div class="stat-label">Total songs • Total song hours</div>
-        <div class="stat-value">
-          ${totals.songs ?? "–"}${typeof totals.songMs === "number" ? ` • ${fmtHoursFromMs(totals.songMs)}` : ""}
-        </div>
+      <div class="stat-card">
+        <div class="stat-kicker">Total songs</div>
+        <div class="stat-big">${escapeHtml(String(songs))}</div>
         <div class="stat-note">Excludes Podcast Episodes playlist</div>
       </div>
 
-      <div class="stat-line">
-        <div class="stat-label">Podcast episodes • Podcast hours</div>
-        <div class="stat-value">
-          ${totals.podcastEpisodes ?? "–"}${typeof totals.podcastMs === "number" ? ` • ${fmtHoursFromMs(totals.podcastMs)}` : ""}
-        </div>
+      <div class="stat-card">
+        <div class="stat-kicker">Total song hours</div>
+        <div class="stat-big">${escapeHtml(String(songHours))}</div>
+        <div class="stat-note">Excludes Podcast Episodes playlist</div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-kicker">Podcast episodes</div>
+        <div class="stat-big">${escapeHtml(String(podEps))}</div>
+        <div class="stat-note">Only from Podcast Episodes playlist</div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-kicker">Podcast hours</div>
+        <div class="stat-big">${escapeHtml(String(podHours))}</div>
         <div class="stat-note">Only from Podcast Episodes playlist</div>
       </div>
     `;
+  }
 
-    othersCards.innerHTML = state.others.length
-      ? state.others.map(cardHtml).join("")
-      : `<div class="muted-small">No “others” playlists added.</div>`;
-
-    wireCardClicks(othersCards);
+  /***********************
+   * Filters + playlists
+   ***********************/
+  function getSection(name) {
+    const sections = state.snapshot?.sections || {};
+    const list = sections?.[name];
+    return Array.isArray(list) ? list : [];
   }
 
   function getFilteredPlaylists() {
-    const sections = state.lastSnapshot?.sections || {};
-    const dailyMix = sections.dailyMix || [];
-    const top = sections.top || [];
-    const other = sections.other || [];
+    const dailyMix = getSection("dailyMix");
+    const top = getSection("top");
+    const other = getSection("other");
 
     if (state.filter === "dailyMix") return dailyMix;
     if (state.filter === "top") return top;
@@ -303,17 +289,16 @@
   function setFilter(next) {
     state.filter = next;
     renderFilterPills();
-    renderPlaylistsList();
+    renderPlaylists();
   }
 
   function renderFilterPills() {
     const pills = document.getElementById("filterPills");
     if (!pills) return;
 
-    const sections = state.lastSnapshot?.sections || {};
-    const dailyMix = sections.dailyMix || [];
-    const top = sections.top || [];
-    const other = sections.other || [];
+    const dailyMix = getSection("dailyMix");
+    const top = getSection("top");
+    const other = getSection("other");
     const allCount = dailyMix.length + top.length + other.length;
 
     const pill = (key, label, count) => `
@@ -334,27 +319,112 @@
     });
   }
 
-  function renderPlaylistsList() {
-    const playlistCards = document.getElementById("playlistCards");
-    const playlistCount = document.getElementById("playlistCount");
-    if (!playlistCards || !playlistCount) return;
+  function renderPlaylists() {
+    const cards = document.getElementById("playlistCards");
+    const count = document.getElementById("playlistCount");
+    if (!cards || !count) return;
 
     const list = getFilteredPlaylists();
-    playlistCards.innerHTML = list.map(cardHtml).join("");
-    playlistCount.textContent = String(list.length);
+    cards.innerHTML = list.map(cardHtml).join("");
+    count.textContent = String(list.length);
+    wireCardClicks(cards);
+  }
 
-    wireCardClicks(playlistCards);
+  /***********************
+   * Manual panels (Others + Year Summary)
+   ***********************/
+  async function fetchPlaylistMeta(playlistId, ownerLabelFallback) {
+    const res = await fetch(API_PLAYLIST, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ playlistId, limit: 0 })
+    });
+
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch {}
+
+    if (!res.ok || !data?.playlist) return null;
+
+    const p = data.playlist;
+    return {
+      id: p.id || playlistId,
+      name: p.name || "Untitled playlist",
+      url: p.url || null,
+      image: p.image || null,
+      totalTracks: typeof p.totalTracks === "number" ? p.totalTracks : null,
+      ownerLabel: p.ownerLabel || ownerLabelFallback
+    };
+  }
+
+  async function loadOthersAndYearSummary() {
+    const others = [];
+    for (const id of OTHERS_PLAYLIST_IDS) {
+      const meta = await fetchPlaylistMeta(id, "by others");
+      if (meta) others.push(meta);
+    }
+    state.others = others;
+
+    const years = [];
+    for (const id of YEAR_SUMMARY_PLAYLIST_IDS) {
+      const meta = await fetchPlaylistMeta(id, "Spotify");
+      if (meta) years.push(meta);
+    }
+    state.yearSummary = years;
+  }
+
+  function renderOthers() {
+    const el = document.getElementById("othersCards");
+    if (!el) return;
+
+    el.innerHTML = state.others.length
+      ? state.others.map(cardHtml).join("")
+      : `<div class="muted-small">No “others” playlists added.</div>`;
+
+    wireCardClicks(el);
   }
 
   function renderYearSummary() {
-    const yearCards = document.getElementById("yearSummaryCards");
-    if (!yearCards) return;
+    const el = document.getElementById("yearSummaryCards");
+    if (!el) return;
 
-    yearCards.innerHTML = state.yearSummary.length
+    el.innerHTML = state.yearSummary.length
       ? state.yearSummary.map(cardHtml).join("")
       : `<div class="muted-small">No year summary playlist added yet.</div>`;
 
-    wireCardClicks(yearCards);
+    wireCardClicks(el);
+  }
+
+  /***********************
+   * Podcast panel
+   ***********************/
+  async function loadPodcastColumn() {
+    state.podcast.tried = true;
+    state.podcast.error = null;
+    state.podcast.playlist = null;
+    state.podcast.items = [];
+
+    try {
+      const res = await fetch(API_PLAYLIST, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ playlistId: PODCAST_PLAYLIST_ID, limit: PODCAST_COLUMN_LIMIT })
+      });
+
+      const text = await res.text();
+      let data = null;
+      try { data = text ? JSON.parse(text) : null; } catch {}
+
+      if (!res.ok || !data) {
+        state.podcast.error = `HTTP ${res.status}`;
+        return;
+      }
+
+      state.podcast.playlist = data.playlist || null;
+      state.podcast.items = Array.isArray(data.items) ? data.items : [];
+    } catch (e) {
+      state.podcast.error = String(e?.message || e);
+    }
   }
 
   function renderPodcastColumn() {
@@ -367,12 +437,11 @@
     const list = document.getElementById("podcastList");
     if (!head || !empty || !errBox || !thumb || !title || !sub || !list) return;
 
-    const p = state.podcast.playlist;
-    const items = state.podcast.items || [];
     const tried = state.podcast.tried;
     const error = state.podcast.error;
+    const p = state.podcast.playlist;
+    const items = state.podcast.items || [];
 
-    // Before first refresh: show the gentle placeholder
     if (!tried) {
       head.hidden = true;
       errBox.hidden = true;
@@ -381,7 +450,7 @@
       return;
     }
 
-    // After refresh: never show "refresh to load..." placeholder again
+    // after refresh: never show placeholder again
     empty.style.display = "none";
 
     if (error) {
@@ -400,7 +469,6 @@
       return;
     }
 
-    // OK
     errBox.hidden = true;
     head.hidden = false;
 
@@ -426,7 +494,7 @@
   }
 
   /***********************
-   * MODAL (playlist detail)
+   * Modal (playlist detail)
    ***********************/
   function openModal() {
     const backdrop = document.getElementById("modalBackdrop");
@@ -469,7 +537,7 @@
       try { data = text ? JSON.parse(text) : null; } catch {}
 
       if (!res.ok) {
-        const msg = (data && (data.error || data.message || data.detail)) || text || `HTTP ${res.status}`;
+        const msg = (data && (data.error || data.message)) || text || `HTTP ${res.status}`;
         throw new Error(msg);
       }
 
@@ -489,14 +557,10 @@
     } catch (err) {
       console.error(err);
       setStatus(`Playlist load failed: ${String(err.message || err)}`);
-      tracklist.innerHTML = `
-        <li class="track">
-          <div class="track-main">
-            <div class="track-name">Failed to load playlist</div>
-            <div class="track-meta">${escapeHtml(String(err.message || err))}</div>
-          </div>
-        </li>
-      `;
+      tracklist.innerHTML = `<li class="track"><div class="track-main">
+        <div class="track-name">Failed to load playlist</div>
+        <div class="track-meta">${escapeHtml(String(err.message || err))}</div>
+      </div></li>`;
     }
   }
 
@@ -518,92 +582,7 @@
   }
 
   /***********************
-   * API fetchers (manual sections)
-   ***********************/
-  async function fetchPlaylistMetaViaApi(playlistId) {
-    const res = await fetch(API_PLAYLIST, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ playlistId, limit: 0 })
-    });
-
-    const text = await res.text();
-    let data = null;
-    try { data = text ? JSON.parse(text) : null; } catch {}
-
-    if (!res.ok || !data) return null;
-
-    const p = data.playlist || {};
-    return {
-      id: p.id || playlistId,
-      name: p.name || "Untitled playlist",
-      url: p.url || p.externalUrl || p.spotifyUrl || null,
-      image: p.image || null,
-      totalTracks: typeof p.totalTracks === "number" ? p.totalTracks : null,
-      ownerLabel: p.ownerLabel || "by others"
-    };
-  }
-
-  async function fetchManualOthers() {
-    const out = [];
-    for (const id of OTHERS_PLAYLIST_IDS) {
-      const meta = await fetchPlaylistMetaViaApi(id);
-      if (meta) out.push({ ...meta, ownerLabel: meta.ownerLabel || "by others" });
-    }
-    state.others = out;
-  }
-
-  async function fetchYearSummary() {
-    const out = [];
-    for (const id of YEAR_SUMMARY_PLAYLIST_IDS) {
-      const meta = await fetchPlaylistMetaViaApi(id);
-      if (meta) out.push({ ...meta, ownerLabel: meta.ownerLabel || "Spotify" });
-    }
-    state.yearSummary = out;
-  }
-
-  async function fetchPodcastPlaylist() {
-    state.podcast.tried = true;
-    state.podcast.error = null;
-    state.podcast.playlist = null;
-    state.podcast.items = [];
-
-    try {
-      const res = await fetch(API_PLAYLIST, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ playlistId: PODCAST_PLAYLIST_ID, limit: PODCAST_COLUMN_LIMIT })
-      });
-
-      const text = await res.text();
-      let data = null;
-      try { data = text ? JSON.parse(text) : null; } catch {}
-
-      if (!res.ok || !data) {
-        state.podcast.error = `HTTP ${res.status}`;
-        return;
-      }
-
-      state.podcast.playlist = data.playlist || null;
-      state.podcast.items = Array.isArray(data.items) ? data.items : [];
-    } catch (e) {
-      state.podcast.error = String(e?.message || e);
-    }
-  }
-
-  /***********************
-   * RENDER ALL
-   ***********************/
-  function renderAll() {
-    renderStatisticsAndOthers();
-    renderFilterPills();
-    renderYearSummary();
-    renderPlaylistsList();
-    renderPodcastColumn();
-  }
-
-  /***********************
-   * REFRESH
+   * Refresh
    ***********************/
   async function refreshFromSpotify() {
     buildShell();
@@ -611,30 +590,33 @@
     setStatus("Refreshing from Spotify…");
 
     try {
-      const res = await fetch(API_REFRESH, {
-        method: "POST",
-        headers: { Accept: "application/json" }
-      });
+      const res = await fetch(API_REFRESH, { method: "POST", headers: { Accept: "application/json" } });
 
       const text = await res.text();
       let data = null;
       try { data = text ? JSON.parse(text) : null; } catch {}
 
       if (!res.ok) {
-        const msg = (data && (data.error || data.message || data.detail)) || text || `HTTP ${res.status}`;
+        const msg = (data && (data.error || data.message)) || text || `HTTP ${res.status}`;
         throw new Error(msg);
       }
 
-      state.lastSnapshot = data;
+      state.snapshot = data;
       state.filter = "all";
 
+      // these require /api/playlist POST to work
       await Promise.all([
-        fetchManualOthers(),
-        fetchYearSummary(),
-        fetchPodcastPlaylist()
+        loadOthersAndYearSummary(),
+        loadPodcastColumn()
       ]);
 
-      renderAll();
+      renderStatistics();
+      renderFilterPills();
+      renderPlaylists();
+      renderOthers();
+      renderYearSummary();
+      renderPodcastColumn();
+
       setStatus("");
     } catch (err) {
       console.error(err);
@@ -645,7 +627,7 @@
   }
 
   /***********************
-   * BOOT
+   * Boot
    ***********************/
   document.addEventListener("DOMContentLoaded", () => {
     blankUntilClick();
