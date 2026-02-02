@@ -81,7 +81,7 @@
     if (!appMain) return;
     appMain.innerHTML = `
       <p class="status" id="statusMessage">
-        Click “Refresh from Spotify” to load your playlists.
+        Click “Refresh from Spotify” to load current live podcasts on Spotify.
       </p>
     `;
   }
@@ -115,7 +115,7 @@
             </div>
           </section>
 
-          <!-- YEAR SUMMARY AS ITS OWN PANEL (NOT INSIDE OTHERS) -->
+          <!-- YEAR SUMMARY AS ITS OWN PANEL -->
           <section class="panel" style="margin-top:16px;">
             <div class="panel-header">
               <h2 class="panel-title">Year Summary Playlist</h2>
@@ -134,7 +134,7 @@
 
             <div class="subpanel subpanel-flex" style="margin-top:12px;">
               <div class="subpanel-header">
-                <div class="subpanel-title">Playlists</div>
+                <h2 class="panel-title">Playlists</h2>
                 <div class="subpanel-count" id="playlistCount">–</div>
               </div>
               <div class="cards cards-scroll" id="playlistCards"></div>
@@ -145,7 +145,7 @@
         <!-- RIGHT COLUMN -->
         <aside class="panel col col-right">
           <div class="panel-header">
-            <h2 class="panel-title">Podcast Episodes Watched</h2>
+            <h2 class="panel-title">Podcast Eps</h2>
           </div>
           <div class="panel-body col-scroll-body">
 
@@ -157,9 +157,8 @@
               </div>
             </div>
 
-            <div class="podcast-empty" id="podcastEmpty">
-              Click refresh to load podcast episodes.
-            </div>
+            <!-- keep node (for layout), but no instructional text -->
+            <div class="podcast-empty" id="podcastEmpty"></div>
 
             <div class="podcast-error" id="podcastError" hidden></div>
 
@@ -232,7 +231,7 @@
   }
 
   /***********************
-   * Statistics (REMOVE THE NOTE LINES)
+   * Statistics
    ***********************/
   function renderStatistics() {
     const grid = document.getElementById("statsGrid");
@@ -259,17 +258,17 @@
       </div>
 
       <div class="stat-card">
-        <div class="stat-kicker">Total song hours</div>
+        <div class="stat-kicker">Total Song Hrs</div>
         <div class="stat-big">${escapeHtml(String(songHours))}</div>
       </div>
 
       <div class="stat-card">
-        <div class="stat-kicker">Podcast episodes</div>
+        <div class="stat-kicker">Podcast eps</div>
         <div class="stat-big">${escapeHtml(String(podEps))}</div>
       </div>
 
       <div class="stat-card">
-        <div class="stat-kicker">Podcast hours</div>
+        <div class="stat-kicker">Podcast hrs</div>
         <div class="stat-big">${escapeHtml(String(podHours))}</div>
       </div>
     `;
@@ -341,6 +340,7 @@
 
   /***********************
    * Manual panels (Others + Year Summary)
+   * Prefer refresh payload, fallback to per-ID fetch
    ***********************/
   async function fetchPlaylistMeta(playlistId, ownerLabelFallback) {
     const res = await fetch(API_PLAYLIST, {
@@ -366,20 +366,26 @@
     };
   }
 
-  async function loadOthersAndYearSummary() {
-    const others = [];
-    for (const id of OTHERS_PLAYLIST_IDS) {
-      const meta = await fetchPlaylistMeta(id, "by others");
-      if (meta) others.push(meta);
+  async function loadOthersAndYearSummaryFallback() {
+    // Others
+    if (!state.others.length) {
+      const others = [];
+      for (const id of OTHERS_PLAYLIST_IDS) {
+        const meta = await fetchPlaylistMeta(id, "by others");
+        if (meta) others.push(meta);
+      }
+      state.others = others;
     }
-    state.others = others;
 
-    const years = [];
-    for (const id of YEAR_SUMMARY_PLAYLIST_IDS) {
-      const meta = await fetchPlaylistMeta(id, "Spotify");
-      if (meta) years.push(meta);
+    // Year Summary
+    if (!state.yearSummary.length) {
+      const years = [];
+      for (const id of YEAR_SUMMARY_PLAYLIST_IDS) {
+        const meta = await fetchPlaylistMeta(id, "Spotify");
+        if (meta) years.push(meta);
+      }
+      state.yearSummary = years;
     }
-    state.yearSummary = years;
   }
 
   function renderOthers() {
@@ -433,7 +439,7 @@
 
       const items = Array.isArray(data.items) ? data.items : [];
 
-      // newest added first (uses normalizeItem.addedAt)
+      // newest added first
       items.sort((a, b) => {
         const ta = a?.addedAt ? Date.parse(a.addedAt) : 0;
         const tb = b?.addedAt ? Date.parse(b.addedAt) : 0;
@@ -464,7 +470,7 @@
     if (!tried) {
       head.hidden = true;
       errBox.hidden = true;
-      empty.style.display = "block";
+      empty.style.display = "none";
       list.innerHTML = "";
       return;
     }
@@ -628,8 +634,12 @@
       state.snapshot = data;
       state.filter = "all";
 
+      // Prefer refresh payload for these panels (fast + reliable)
+      state.others = Array.isArray(data?.othersPlaylists) ? data.othersPlaylists.map(p => ({ ...p, ownerLabel: "by others" })) : [];
+      state.yearSummary = Array.isArray(data?.yearSummaryPlaylists) ? data.yearSummaryPlaylists.map(p => ({ ...p, ownerLabel: "Spotify" })) : [];
+
       await Promise.all([
-        loadOthersAndYearSummary(),
+        loadOthersAndYearSummaryFallback(),
         loadPodcastColumn()
       ]);
 

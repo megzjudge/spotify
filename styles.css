@@ -1,5 +1,8 @@
 /* =========================
    Spotify Dark UI v2 (with fixed footer + scroll panels)
+   + continuous background
+   + styled scrollbars
+   + podcast row sizing
    ========================= */
 
 :root {
@@ -39,8 +42,14 @@
 
 html, body { height: 100%; }
 
-/* Put the background on html to avoid “cutting” on mobile */
-html {
+html { background: #050708; }
+
+/* Continuous background layer (prevents “cutting” on mobile) */
+body::before{
+  content:"";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
   background:
     radial-gradient(900px 520px at 18% 0%, rgba(29,185,84,0.18), transparent 60%),
     radial-gradient(900px 520px at 82% 0%, rgba(29,185,84,0.10), transparent 62%),
@@ -136,7 +145,6 @@ main {
   margin: 0 auto;
   padding: 18px var(--pad) 28px;
   width: 100%;
-
   flex: 1; /* key for sticky footer */
 }
 
@@ -157,6 +165,8 @@ main {
   gap: 18px;
   align-items: start;
 }
+
+.col { min-width: 0; }
 
 /* Panels */
 .panel {
@@ -182,8 +192,11 @@ main {
   color: var(--muted);
 }
 
-/* Make bodies flex where needed */
-.panel-body { padding: 14px 14px 16px; }
+/* Make bodies flex-safe for nested scrolling */
+.panel-body {
+  padding: 14px 14px 16px;
+  min-height: 0;
+}
 
 .col-scroll-body {
   display: flex;
@@ -192,6 +205,7 @@ main {
 
   /* Desktop “lock to viewport” feel */
   max-height: var(--colMaxH);
+  min-height: 0;
 }
 
 /* =========================
@@ -203,6 +217,7 @@ main {
   border-radius: var(--radius-md);
   background: var(--panel-2);
   overflow: hidden;
+  min-height: 0;
 }
 
 .subpanel-header {
@@ -213,23 +228,17 @@ main {
   border-bottom: 1px solid var(--stroke);
 }
 
-.subpanel-title {
-  font-size: 14px;
-  font-weight: 650;
-  color: rgba(255,255,255,0.88);
-}
-
-.subpanel-count {
-  color: var(--muted2);
-  font-size: 13px;
-}
-
 /* Let the playlists block expand + scroll internally */
 .subpanel-flex {
   display: flex;
   flex-direction: column;
   min-height: 0;
   flex: 1;
+}
+
+.subpanel-count {
+  color: var(--muted2);
+  font-size: 13px;
 }
 
 /* =========================
@@ -258,6 +267,7 @@ main {
   text-transform: uppercase;
   letter-spacing: 0.12em;
   margin-bottom: 6px;
+  white-space: nowrap; /* keep single line */
 }
 
 .stat-big {
@@ -312,15 +322,45 @@ main {
   flex-direction: column;
   gap: 10px;
   padding: 12px;
+  min-height: 0;
 }
 
 .cards-compact { padding: 0; }
 
 /* Scrollable cards areas (Playlists + Podcast) */
-.cards-scroll {
+.cards-scroll,
+.podcast-scroll {
   overflow: auto;
   min-height: 0;
   flex: 1;
+
+  /* Firefox */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.18) rgba(0,0,0,0.18);
+}
+
+/* WebKit scrollbars */
+.cards-scroll::-webkit-scrollbar,
+.podcast-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+
+.cards-scroll::-webkit-scrollbar-track,
+.podcast-scroll::-webkit-scrollbar-track {
+  background: rgba(0,0,0,0.18);
+  border-left: 1px solid rgba(255,255,255,0.05);
+}
+
+.cards-scroll::-webkit-scrollbar-thumb,
+.podcast-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.14);
+  border: 2px solid rgba(0,0,0,0.18);
+  border-radius: 999px;
+}
+
+.cards-scroll::-webkit-scrollbar-thumb:hover,
+.podcast-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,255,255,0.22);
 }
 
 .card {
@@ -354,7 +394,7 @@ main {
   margin: 0;
   font-size: 14px;
   font-weight: 750;
-  color: rgba(255,255,255,0.90);
+  color: rgba(255,255,255,.90);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -404,10 +444,9 @@ main {
   font-size: 12.5px;
 }
 
+/* keep element available, but you’re no longer showing instructional text */
 .podcast-empty {
-  color: var(--muted);
-  font-size: 13.5px;
-  padding: 10px 2px;
+  display: none;
 }
 
 .podcast-error {
@@ -423,17 +462,12 @@ main {
   list-style: none;
   padding: 0;
   margin: 0;
+
   display: flex;
   flex-direction: column;
   gap: 10px;
 
   min-height: 0;
-}
-
-.podcast-scroll {
-  overflow: auto;
-  min-height: 0;
-  flex: 1;
 }
 
 .podcast-item {
@@ -445,37 +479,50 @@ main {
 
 .podcast-link {
   display: block;
-  padding: 10px 10px;
+  padding: 0; /* controlled by grid */
 }
 
 .podcast-link-grid {
   display: grid;
-  grid-template-columns: 56px 1fr;
+  grid-template-columns: 64px 1fr;
   gap: 12px;
   align-items: center;
+  padding: 12px;
 }
 
+/* Thumb is the sizing reference */
 .podcast-ep-thumb {
-  width: 56px;
-  height: 56px;
-  border-radius: 14px;
+  width: 64px;
+  height: 64px;
+  border-radius: 16px;
   object-fit: cover;
   background: #000;
 }
 
-.podcast-ep-meta { min-width: 0; }
+/* Lock row height to thumbnail (prevents clipping/cropping feeling) */
+.podcast-ep-meta {
+  min-width: 0;
+  height: 64px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
 
 .podcast-item-title {
   font-weight: 750;
   font-size: 13.5px;
   color: rgba(255,255,255,0.90);
-  white-space: nowrap;
+  line-height: 1.25;
+
+  /* allow up to 2 lines but remain within 64px box */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .podcast-item-sub {
-  margin-top: 4px;
+  margin-top: 6px;
   color: var(--muted2);
   font-size: 12px;
   white-space: nowrap;

@@ -154,10 +154,12 @@ function normalizeItem(it) {
       type: "track",
       id: obj.id,
       name: obj.name,
-      artists: (obj.artists || []).map((a) => a.name).filter(Boolean),
+      artists: (obj.artists || []).map(a => a.name).filter(Boolean),
       url,
       durationMs,
-      addedAt: it.added_at || null
+      addedAt: it.added_at || null,
+
+      image: obj.album?.images?.[0]?.url || null
     };
   }
 
@@ -169,7 +171,9 @@ function normalizeItem(it) {
       artists: obj.show?.name ? [obj.show.name] : [],
       url,
       durationMs,
-      addedAt: it.added_at || null
+      addedAt: it.added_at || null,
+
+      image: obj.images?.[0]?.url || null
     };
   }
 

@@ -94,13 +94,16 @@ export async function onRequestPost({ env, request }) {
     /***********************
      * SPECIAL BUCKETS
      ***********************/
-    const podcastPlaylist = normalized.find((p) => p.id === PODCAST_PLAYLIST_ID) || null;
+    const podcastPlaylist =
+      normalized.find((p) => p.id === PODCAST_PLAYLIST_ID) || null;
 
     // Manual “Others playlists” (not yours, temporary, etc)
-    const othersPlaylists = normalized.filter((p) => OTHERS_PLAYLIST_IDS.includes(p.id));
+    const othersPlaylists =
+      normalized.filter((p) => OTHERS_PLAYLIST_IDS.includes(p.id));
 
     // Year summary playlists (Spotify-made; you add one per year)
-    const yearSummaryPlaylists = normalized.filter((p) => YEAR_SUMMARY_PLAYLIST_IDS.includes(p.id));
+    const yearSummaryPlaylists =
+      normalized.filter((p) => YEAR_SUMMARY_PLAYLIST_IDS.includes(p.id));
 
     /***********************
      * NORMAL LIBRARY (YOUR PLAYLISTS)
@@ -173,7 +176,7 @@ export async function onRequestPost({ env, request }) {
       othersPlaylists,
       yearSummaryPlaylists,
 
-      // Optional: useful for UI to render the podcast panel header without extra calls
+      // Useful for UI to render podcast panel header without extra calls
       podcastPlaylist
     });
 
