@@ -1,22 +1,55 @@
 (() => {
+  /***********************
+   * CONFIG
+   ***********************/
   const API_REFRESH = "/api/refresh";
   const API_PLAYLIST = "/api/playlist";
 
-  // IMPORTANT: put your Podcast Episodes playlist ID here (same one you used in refresh.js)
+  // Your podcast playlist (private is fine — pulled via your server token)
   const PODCAST_PLAYLIST_ID = "2tHrihmpYzDbJ8rit7HtFR";
 
-  const refreshButton = document.getElementById("refreshButton");
-  const appMain = document.getElementById("appMain");
+  // Manually curated playlists NOT owned by you (you choose these)
+  const OTHERS_PLAYLIST_IDS = [
+    "71z6BdHlnfNj4DKRhuu1Fk",
+    "7jYNznHoIYgJBzwT5jpoOe",
+    "41PZG18MrSTagagiIaiG4X",
+    "37i9dQZF1DX5mB2C8gBeUM",
+    "37i9dQZF1EQnsJ0xmvpihE"
+  ];
 
+  // Year summary playlists (one per year; add more later)
+  const YEAR_SUMMARY_PLAYLIST_IDS = [
+    "37i9dQZEVXcXHWVVT0lfDq" // 2025
+  ];
+
+  // Limit how many items we display in the Podcast column to keep it snappy
+  const PODCAST_COLUMN_LIMIT = 120;
+
+  /***********************
+   * DOM
+   ***********************/
+  const refreshButton = document.getElementById("refreshButton");
+  const appMain = document.getElementById("appMain"); // ensure <main id="appMain"></main>
+
+  /***********************
+   * STATE
+   ***********************/
   let state = {
     lastSnapshot: null,
     filter: "all", // all | dailyMix | top | other
     podcast: {
+      tried: false, // <- new: used to suppress the “refresh to load…” placeholder after refresh
       playlist: null,
-      items: []
-    }
+      items: [],
+      error: null
+    },
+    others: [],
+    yearSummary: []
   };
 
+  /***********************
+   * UTIL
+   ***********************/
   function setButtonLoading(isLoading) {
     if (!refreshButton) return;
     refreshButton.disabled = isLoading;
@@ -32,31 +65,32 @@
       .replace(/'/g, "&#39;");
   }
 
-  function fmtDate(iso) {
-    if (!iso) return "–";
-    const d = new Date(iso);
-    if (isNaN(d.getTime())) return String(iso);
-    return d.toLocaleString(undefined, {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit"
-    });
+  function setStatus(msg) {
+    const el = document.getElementById("statusMessage");
+    if (!el) return;
+    el.textContent = msg || "";
   }
 
-  function fmtHours(ms) {
+  function fmtHoursFromMs(ms) {
     const h = (Number(ms) || 0) / 3600000;
     return `${h.toFixed(h >= 10 ? 0 : 1)}h`;
   }
 
+  /***********************
+   * BLANK UNTIL CLICK
+   ***********************/
   function blankUntilClick() {
     if (!appMain) return;
     appMain.innerHTML = `
-      <p class="status" id="statusMessage">Click “Refresh from Spotify” to load your playlists.</p>
+      <p class="status" id="statusMessage">
+        Click “Refresh from Spotify” to load your playlists.
+      </p>
     `;
   }
 
+  /***********************
+   * UI SHELL (layout like your screenshot)
+   ***********************/
   function buildShell() {
     if (!appMain) return;
 
@@ -64,15 +98,19 @@
       <p class="status" id="statusMessage"></p>
 
       <div class="app-grid">
-        <!-- LEFT: LIBRARY + OTHERS UNDER IT -->
+
+        <!-- LEFT: STATISTICS + OTHERS (as its own block OUTSIDE stats) -->
         <section class="panel" id="leftPanel">
           <div class="panel-header">
-            <h2 class="panel-title">Library</h2>
+            <h2 class="panel-title">Statistics</h2>
           </div>
-          <div class="panel-body">
-            <div class="summary-grid" id="summaryGrid"></div>
 
-            <div class="subpanel" style="margin-top:14px;">
+          <div class="panel-body">
+            <div class="stats-stack" id="statsStack"></div>
+          </div>
+
+          <div class="panel-body" style="padding-top:0;">
+            <div class="subpanel">
               <div class="subpanel-header">
                 <div class="subpanel-title">Others playlists</div>
               </div>
@@ -81,10 +119,18 @@
           </div>
         </section>
 
-        <!-- MIDDLE: FILTER PILLS + PLAYLISTS LIST -->
+        <!-- MIDDLE: FILTERS + YEAR SUMMARY + PLAYLISTS -->
         <section class="panel" id="middlePanel">
           <div class="panel-body">
+
             <div class="filter-pills" id="filterPills"></div>
+
+            <div class="subpanel" style="margin-top:12px;">
+              <div class="subpanel-header">
+                <div class="subpanel-title">Year Summary Playlist</div>
+              </div>
+              <div class="cards cards-compact" id="yearSummaryCards"></div>
+            </div>
 
             <div class="subpanel" style="margin-top:12px;">
               <div class="subpanel-header">
@@ -93,6 +139,7 @@
               </div>
               <div class="cards" id="playlistCards"></div>
             </div>
+
           </div>
         </section>
 
@@ -101,6 +148,7 @@
           <div class="panel-header">
             <h2 class="panel-title">Podcast Episodes Watched</h2>
           </div>
+
           <div class="panel-body">
             <div class="podcast-head" id="podcastHead" hidden>
               <img class="podcast-thumb" id="podcastThumb" alt="">
@@ -110,16 +158,21 @@
               </div>
             </div>
 
+            <!-- Placeholder (only before first refresh) -->
             <div class="podcast-empty" id="podcastEmpty">
-              Refresh to load your podcast playlist.
+              Click refresh to load podcast episodes.
             </div>
+
+            <!-- Error (if refresh attempted but podcast load fails) -->
+            <div class="podcast-error" id="podcastError" hidden></div>
 
             <ul class="podcast-list" id="podcastList"></ul>
           </div>
         </aside>
+
       </div>
 
-      <!-- MODAL for playlist details -->
+      <!-- MODAL -->
       <div class="modal-backdrop" id="modalBackdrop" aria-hidden="true">
         <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
           <div class="modal-top">
@@ -140,7 +193,7 @@
       </div>
     `;
 
-    // modal close
+    // modal close wiring
     const backdrop = document.getElementById("modalBackdrop");
     const closeBtn = document.getElementById("modalCloseBtn");
     if (closeBtn) closeBtn.addEventListener("click", closeModal);
@@ -154,30 +207,103 @@
     });
   }
 
-  function setStatus(msg) {
-    const el = document.getElementById("statusMessage");
-    if (!el) return;
-    el.textContent = msg || "";
-  }
-
+  /***********************
+   * RENDER HELPERS
+   ***********************/
   function cardHtml(p) {
     const img = p.image || "https://spotify.jdge.cc/images/spotify_logo.png";
     const count = typeof p.totalTracks === "number" ? `${p.totalTracks} items` : "";
+    const owner = p.ownerLabel ? ` • ${p.ownerLabel}` : "";
     return `
       <div class="card" data-playlist-id="${escapeHtml(p.id)}">
         <img class="thumb" src="${escapeHtml(img)}" alt="" loading="lazy">
         <div class="card-meta">
           <p class="card-title">${escapeHtml(p.name || "Untitled")}</p>
-          <p class="card-sub">${escapeHtml(count)}</p>
+          <p class="card-sub">${escapeHtml(count)}${escapeHtml(owner)}</p>
         </div>
       </div>
     `;
   }
 
+  function wireCardClicks(containerEl) {
+    containerEl.querySelectorAll(".card[data-playlist-id]").forEach((el) => {
+      el.addEventListener("click", async () => {
+        const id = el.getAttribute("data-playlist-id");
+        if (!id) return;
+        await openPlaylistModal(id);
+      });
+    });
+  }
+
+  /**
+   * STATISTICS (3 lines, no “last updated”)
+   * - Total playlists
+   * - Total songs + total song hours (exclude podcast playlist)
+   * - Podcast episodes + podcast hours (only podcast playlist)
+   *
+   * This expects your refresh payload to include totals like:
+   * totals.playlists
+   * totals.songs
+   * totals.songMs
+   * totals.podcastEpisodes
+   * totals.podcastMs
+   *
+   * If your backend doesn’t provide those yet, you’ll see “–”.
+   */
+  function renderStatisticsAndOthers() {
+    const data = state.lastSnapshot;
+    const totals = data?.totals || {};
+
+    const statsStack = document.getElementById("statsStack");
+    const othersCards = document.getElementById("othersCards");
+    if (!statsStack || !othersCards) return;
+
+    statsStack.innerHTML = `
+      <div class="stat-line">
+        <div class="stat-label">Total playlists</div>
+        <div class="stat-value">${totals.playlists ?? "–"}</div>
+      </div>
+
+      <div class="stat-line">
+        <div class="stat-label">Total songs • Total song hours</div>
+        <div class="stat-value">
+          ${totals.songs ?? "–"}${typeof totals.songMs === "number" ? ` • ${fmtHoursFromMs(totals.songMs)}` : ""}
+        </div>
+        <div class="stat-note">Excludes Podcast Episodes playlist</div>
+      </div>
+
+      <div class="stat-line">
+        <div class="stat-label">Podcast episodes • Podcast hours</div>
+        <div class="stat-value">
+          ${totals.podcastEpisodes ?? "–"}${typeof totals.podcastMs === "number" ? ` • ${fmtHoursFromMs(totals.podcastMs)}` : ""}
+        </div>
+        <div class="stat-note">Only from Podcast Episodes playlist</div>
+      </div>
+    `;
+
+    othersCards.innerHTML = state.others.length
+      ? state.others.map(cardHtml).join("")
+      : `<div class="muted-small">No “others” playlists added.</div>`;
+
+    wireCardClicks(othersCards);
+  }
+
+  function getFilteredPlaylists() {
+    const sections = state.lastSnapshot?.sections || {};
+    const dailyMix = sections.dailyMix || [];
+    const top = sections.top || [];
+    const other = sections.other || [];
+
+    if (state.filter === "dailyMix") return dailyMix;
+    if (state.filter === "top") return top;
+    if (state.filter === "other") return other;
+    return [...dailyMix, ...top, ...other];
+  }
+
   function setFilter(next) {
     state.filter = next;
-    renderPlaylistsList();
     renderFilterPills();
+    renderPlaylistsList();
   }
 
   function renderFilterPills() {
@@ -208,43 +334,6 @@
     });
   }
 
-  function renderLibraryAndOthers() {
-    const data = state.lastSnapshot;
-    const totals = data?.totals || {};
-    const othersPlaylists = Array.isArray(data?.othersPlaylists) ? data.othersPlaylists : [];
-
-    const summaryGrid = document.getElementById("summaryGrid");
-    const othersCards = document.getElementById("othersCards");
-    if (!summaryGrid || !othersCards) return;
-
-    summaryGrid.innerHTML = `
-      <div class="summary-card"><h2>Total playlists</h2><p class="summary-value">${totals.playlists ?? "–"}</p></div>
-      <div class="summary-card"><h2>Total songs</h2><p class="summary-value">${totals.songs ?? "–"}</p></div>
-      <div class="summary-card"><h2>Total hours</h2><p class="summary-value">${totals.songMs ? fmtHours(totals.songMs) : "–"}</p></div>
-      <div class="summary-card"><h2>Podcast episodes</h2><p class="summary-value">${totals.podcastEpisodes ?? "–"}</p></div>
-      <div class="summary-card"><h2>Podcast hours</h2><p class="summary-value">${totals.podcastMs ? fmtHours(totals.podcastMs) : "–"}</p></div>
-      <div class="summary-card"><h2>Last updated</h2><p class="summary-value">${fmtDate(data?.lastUpdated)}</p></div>
-    `;
-
-    othersCards.innerHTML = othersPlaylists.length
-      ? othersPlaylists.map(cardHtml).join("")
-      : `<div class="muted-small">No “others” playlists have been added yet.</div>`;
-
-    wireCardClicks(othersCards);
-  }
-
-  function getFilteredPlaylists() {
-    const sections = state.lastSnapshot?.sections || {};
-    const dailyMix = sections.dailyMix || [];
-    const top = sections.top || [];
-    const other = sections.other || [];
-
-    if (state.filter === "dailyMix") return dailyMix;
-    if (state.filter === "top") return top;
-    if (state.filter === "other") return other;
-    return [...dailyMix, ...top, ...other];
-  }
-
   function renderPlaylistsList() {
     const playlistCards = document.getElementById("playlistCards");
     const playlistCount = document.getElementById("playlistCount");
@@ -257,27 +346,63 @@
     wireCardClicks(playlistCards);
   }
 
+  function renderYearSummary() {
+    const yearCards = document.getElementById("yearSummaryCards");
+    if (!yearCards) return;
+
+    yearCards.innerHTML = state.yearSummary.length
+      ? state.yearSummary.map(cardHtml).join("")
+      : `<div class="muted-small">No year summary playlist added yet.</div>`;
+
+    wireCardClicks(yearCards);
+  }
+
   function renderPodcastColumn() {
     const head = document.getElementById("podcastHead");
     const empty = document.getElementById("podcastEmpty");
+    const errBox = document.getElementById("podcastError");
     const thumb = document.getElementById("podcastThumb");
     const title = document.getElementById("podcastTitle");
     const sub = document.getElementById("podcastSub");
     const list = document.getElementById("podcastList");
-    if (!head || !empty || !thumb || !title || !sub || !list) return;
+    if (!head || !empty || !errBox || !thumb || !title || !sub || !list) return;
 
     const p = state.podcast.playlist;
     const items = state.podcast.items || [];
+    const tried = state.podcast.tried;
+    const error = state.podcast.error;
 
-    if (!p) {
+    // Before first refresh: show the gentle placeholder
+    if (!tried) {
       head.hidden = true;
+      errBox.hidden = true;
       empty.style.display = "block";
       list.innerHTML = "";
       return;
     }
 
-    head.hidden = false;
+    // After refresh: never show "refresh to load..." placeholder again
     empty.style.display = "none";
+
+    if (error) {
+      head.hidden = true;
+      errBox.hidden = false;
+      errBox.textContent = `Podcast playlist failed to load: ${error}`;
+      list.innerHTML = "";
+      return;
+    }
+
+    if (!p) {
+      head.hidden = true;
+      errBox.hidden = false;
+      errBox.textContent = "Podcast playlist data missing.";
+      list.innerHTML = "";
+      return;
+    }
+
+    // OK
+    errBox.hidden = true;
+    head.hidden = false;
 
     thumb.src = p.image || "https://spotify.jdge.cc/images/spotify_logo.png";
     title.textContent = p.name || "Podcast Episodes";
@@ -300,16 +425,9 @@
     `;
   }
 
-  function wireCardClicks(containerEl) {
-    containerEl.querySelectorAll(".card[data-playlist-id]").forEach((el) => {
-      el.addEventListener("click", async () => {
-        const id = el.getAttribute("data-playlist-id");
-        if (!id) return;
-        await openPlaylistModal(id);
-      });
-    });
-  }
-
+  /***********************
+   * MODAL (playlist detail)
+   ***********************/
   function openModal() {
     const backdrop = document.getElementById("modalBackdrop");
     if (!backdrop) return;
@@ -399,37 +517,94 @@
     `;
   }
 
+  /***********************
+   * API fetchers (manual sections)
+   ***********************/
+  async function fetchPlaylistMetaViaApi(playlistId) {
+    const res = await fetch(API_PLAYLIST, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ playlistId, limit: 0 })
+    });
+
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch {}
+
+    if (!res.ok || !data) return null;
+
+    const p = data.playlist || {};
+    return {
+      id: p.id || playlistId,
+      name: p.name || "Untitled playlist",
+      url: p.url || p.externalUrl || p.spotifyUrl || null,
+      image: p.image || null,
+      totalTracks: typeof p.totalTracks === "number" ? p.totalTracks : null,
+      ownerLabel: p.ownerLabel || "by others"
+    };
+  }
+
+  async function fetchManualOthers() {
+    const out = [];
+    for (const id of OTHERS_PLAYLIST_IDS) {
+      const meta = await fetchPlaylistMetaViaApi(id);
+      if (meta) out.push({ ...meta, ownerLabel: meta.ownerLabel || "by others" });
+    }
+    state.others = out;
+  }
+
+  async function fetchYearSummary() {
+    const out = [];
+    for (const id of YEAR_SUMMARY_PLAYLIST_IDS) {
+      const meta = await fetchPlaylistMetaViaApi(id);
+      if (meta) out.push({ ...meta, ownerLabel: meta.ownerLabel || "Spotify" });
+    }
+    state.yearSummary = out;
+  }
+
   async function fetchPodcastPlaylist() {
-    // fetch the podcast playlist’s items to show in the right column
-    if (!PODCAST_PLAYLIST_ID || PODCAST_PLAYLIST_ID.includes("PUT_")) return;
+    state.podcast.tried = true;
+    state.podcast.error = null;
+    state.podcast.playlist = null;
+    state.podcast.items = [];
 
     try {
       const res = await fetch(API_PLAYLIST, {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ playlistId: PODCAST_PLAYLIST_ID, limit: 200 })
+        body: JSON.stringify({ playlistId: PODCAST_PLAYLIST_ID, limit: PODCAST_COLUMN_LIMIT })
       });
 
       const text = await res.text();
       let data = null;
       try { data = text ? JSON.parse(text) : null; } catch {}
 
-      if (!res.ok) return;
+      if (!res.ok || !data) {
+        state.podcast.error = `HTTP ${res.status}`;
+        return;
+      }
 
       state.podcast.playlist = data.playlist || null;
       state.podcast.items = Array.isArray(data.items) ? data.items : [];
-    } catch {
-      // ignore
+    } catch (e) {
+      state.podcast.error = String(e?.message || e);
     }
   }
 
+  /***********************
+   * RENDER ALL
+   ***********************/
   function renderAll() {
-    renderLibraryAndOthers();
+    renderStatisticsAndOthers();
     renderFilterPills();
+    renderYearSummary();
     renderPlaylistsList();
     renderPodcastColumn();
   }
 
+  /***********************
+   * REFRESH
+   ***********************/
   async function refreshFromSpotify() {
     buildShell();
     setButtonLoading(true);
@@ -453,8 +628,11 @@
       state.lastSnapshot = data;
       state.filter = "all";
 
-      // load podcast playlist items for right column
-      await fetchPodcastPlaylist();
+      await Promise.all([
+        fetchManualOthers(),
+        fetchYearSummary(),
+        fetchPodcastPlaylist()
+      ]);
 
       renderAll();
       setStatus("");
@@ -466,6 +644,9 @@
     }
   }
 
+  /***********************
+   * BOOT
+   ***********************/
   document.addEventListener("DOMContentLoaded", () => {
     blankUntilClick();
     if (refreshButton) refreshButton.addEventListener("click", refreshFromSpotify);
