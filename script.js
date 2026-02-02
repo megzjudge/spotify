@@ -1,21 +1,11 @@
-// script.js
 (() => {
   const API_REFRESH = "/api/refresh";
-  const LS_KEY = "spotify_snapshot_v1";
+  const API_PLAYLIST = "/api/playlist";
 
   const refreshButton = document.getElementById("refreshButton");
-  const statusMessage = document.getElementById("statusMessage");
-  const summarySection = document.getElementById("summarySection");
-  const playlistsContainer = document.getElementById("playlistsContainer");
-  const noChangesSection = document.getElementById("noChangesSection");
+  const appMain = document.getElementById("appMain");
 
-  const totalPlaylistsEl = document.getElementById("totalPlaylists");
-  const totalNewTracksEl = document.getElementById("totalNewTracks");
-  const lastUpdatedEl = document.getElementById("lastUpdated");
-
-  const topsSection = document.getElementById("topsSection");
-  const topArtistsList = document.getElementById("topArtistsList");
-  const topTracksList = document.getElementById("topTracksList");
+  let snapshot = null;
 
   function setButtonLoading(isLoading) {
     if (!refreshButton) return;
@@ -23,42 +13,253 @@
     refreshButton.classList.toggle("is-loading", isLoading);
   }
 
-  function setBlankState() {
-    if (statusMessage) {
-      statusMessage.textContent =
-        "Click “Refresh from Spotify” to pull the latest playlist data.";
-    }
-    if (summarySection) summarySection.hidden = true;
-    if (noChangesSection) noChangesSection.hidden = true;
-    if (playlistsContainer) playlistsContainer.innerHTML = "";
-    if (topsSection) topsSection.hidden = true;
-
-    if (totalPlaylistsEl) totalPlaylistsEl.textContent = "–";
-    if (totalNewTracksEl) totalNewTracksEl.textContent = "–";
-    if (lastUpdatedEl) lastUpdatedEl.textContent = "Not yet run";
+  function escapeHtml(str) {
+    return String(str ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
   }
 
-  function setErrorState(message) {
-    if (statusMessage) statusMessage.textContent = message;
-    if (summarySection) summarySection.hidden = true;
-    if (noChangesSection) noChangesSection.hidden = true;
-    if (playlistsContainer) playlistsContainer.innerHTML = "";
-    if (topsSection) topsSection.hidden = true;
+  function fmtDate(iso) {
+    if (!iso) return "–";
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return String(iso);
+    return d.toLocaleString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit"
+    });
   }
 
-  function saveSnapshot(data) {
+  function fmtHours(ms) {
+    const h = (Number(ms) || 0) / 3600000;
+    return `${h.toFixed(h >= 10 ? 0 : 1)}h`;
+  }
+
+  function blankUntilClick() {
+    if (!appMain) return;
+    appMain.innerHTML = `
+      <p class="status" id="statusMessage">Click “Refresh from Spotify” to load your playlists.</p>
+    `;
+  }
+
+  function buildShell() {
+    if (!appMain) return;
+    appMain.innerHTML = `
+      <p class="status" id="statusMessage"></p>
+
+      <div class="app-grid">
+        <section class="panel" id="leftPanel">
+          <div class="panel-header">
+            <h2 class="panel-title">Library</h2>
+          </div>
+          <div class="panel-body">
+            <div class="summary-grid" id="summaryGrid"></div>
+            <div style="height:12px"></div>
+            <div class="accordion" id="accordion"></div>
+          </div>
+        </section>
+
+        <section class="panel" id="centerPanel">
+          <div class="panel-body detail-empty" id="detailEmpty">
+            Click a playlist to view songs.
+          </div>
+
+          <div id="detailView" style="display:none">
+            <div class="detail-head">
+              <img class="detail-thumb" id="detailThumb" alt="">
+              <div style="min-width:0">
+                <h3 class="detail-title" id="detailTitle"></h3>
+                <p class="detail-sub" id="detailSub"></p>
+              </div>
+            </div>
+            <ul class="tracklist" id="tracklist"></ul>
+          </div>
+        </section>
+
+        <aside class="panel" id="rightPanel">
+          <div class="panel-header">
+            <h2 class="panel-title">Special</h2>
+          </div>
+          <div class="panel-body">
+            <div class="menu" id="specialMenu"></div>
+          </div>
+        </aside>
+      </div>
+    `;
+  }
+
+  function setStatus(msg) {
+    const el = document.getElementById("statusMessage");
+    if (!el) return;
+    el.textContent = msg || "";
+  }
+
+  function cardHtml(p) {
+    const img = p.image || "https://spotify.jdge.cc/images/spotify_logo.png";
+    const count = typeof p.totalTracks === "number" ? `${p.totalTracks} items` : "";
+    const owner = p.ownerIsMe === false ? "by others" : "";
+    const sub = [count, owner].filter(Boolean).join(" • ");
+
+    return `
+      <div class="card" data-playlist-id="${escapeHtml(p.id)}">
+        <img class="thumb" src="${escapeHtml(img)}" alt="" loading="lazy">
+        <div class="card-meta">
+          <p class="card-title">${escapeHtml(p.name || "Untitled")}</p>
+          <p class="card-sub">${escapeHtml(sub)}</p>
+        </div>
+      </div>
+    `;
+  }
+
+  function makeAcc(label, playlists, openByDefault) {
+    const wrap = document.createElement("div");
+    wrap.className = `acc ${openByDefault ? "open" : ""}`;
+
+    wrap.innerHTML = `
+      <button type="button">
+        <div>${escapeHtml(label)}</div>
+        <span>${playlists.length}</span>
+      </button>
+      <div class="acc-body">
+        <div class="cards">
+          ${playlists.map(cardHtml).join("")}
+        </div>
+      </div>
+    `;
+
+    wrap.querySelector("button").addEventListener("click", () => {
+      wrap.classList.toggle("open");
+    });
+
+    return wrap;
+  }
+
+  function renderSnapshot(data) {
+    const totals = data?.totals || {};
+    const sections = data?.sections || {};
+    const specials = Array.isArray(data?.specials) ? data.specials : [];
+
+    const summaryGrid = document.getElementById("summaryGrid");
+    const accordion = document.getElementById("accordion");
+    const specialMenu = document.getElementById("specialMenu");
+
+    if (!summaryGrid || !accordion || !specialMenu) return;
+
+    // Summary: your new top stats
+    summaryGrid.innerHTML = `
+      <div class="summary-card"><h2>Total playlists</h2><p class="summary-value">${totals.playlists ?? "–"}</p></div>
+      <div class="summary-card"><h2>Total songs</h2><p class="summary-value">${totals.songs ?? "–"}</p></div>
+      <div class="summary-card"><h2>Total hours</h2><p class="summary-value">${totals.songMs ? fmtHours(totals.songMs) : "–"}</p></div>
+      <div class="summary-card"><h2>Podcast episodes</h2><p class="summary-value">${totals.podcastEpisodes ?? "–"}</p></div>
+      <div class="summary-card"><h2>Podcast hours</h2><p class="summary-value">${totals.podcastMs ? fmtHours(totals.podcastMs) : "–"}</p></div>
+      <div class="summary-card"><h2>Last updated</h2><p class="summary-value">${fmtDate(data.lastUpdated)}</p></div>
+    `;
+
+    // Accordion: default open should be the main set.
+    accordion.innerHTML = "";
+    accordion.appendChild(makeAcc("Playlists", sections.other ? [...(sections.dailyMix||[]), ...(sections.top||[]), ...(sections.other||[])] : [], true));
+    accordion.appendChild(makeAcc("Daily Mix", sections.dailyMix || [], false));
+    accordion.appendChild(makeAcc("Top", sections.top || [], false));
+    accordion.appendChild(makeAcc("Other", sections.other || [], false));
+
+    // Special menu (right)
+    specialMenu.innerHTML = specials.length
+      ? specials.map(cardHtml).join("")
+      : `<div style="color:var(--muted);font-size:.9rem">No special playlists found.</div>`;
+
+    // Wire clicks
+    wireCardClicks();
+  }
+
+  function wireCardClicks() {
+    document.querySelectorAll(".card[data-playlist-id]").forEach((el) => {
+      el.addEventListener("click", async () => {
+        const id = el.getAttribute("data-playlist-id");
+        if (!id) return;
+        await openPlaylist(id);
+      });
+    });
+  }
+
+  async function openPlaylist(playlistId) {
+    setStatus("Loading playlist…");
+
+    const detailEmpty = document.getElementById("detailEmpty");
+    const detailView = document.getElementById("detailView");
+    const detailThumb = document.getElementById("detailThumb");
+    const detailTitle = document.getElementById("detailTitle");
+    const detailSub = document.getElementById("detailSub");
+    const tracklist = document.getElementById("tracklist");
+
+    if (!detailEmpty || !detailView || !detailThumb || !detailTitle || !detailSub || !tracklist) return;
+
     try {
-      localStorage.setItem(LS_KEY, JSON.stringify(data));
-    } catch (e) {
-      console.warn("Failed to save snapshot to localStorage", e);
+      const res = await fetch(API_PLAYLIST, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ playlistId })
+      });
+
+      const text = await res.text();
+      let data = null;
+      try { data = text ? JSON.parse(text) : null; } catch {}
+
+      if (!res.ok) {
+        const msg = (data && (data.error || data.message || data.detail)) || text || `HTTP ${res.status}`;
+        throw new Error(msg);
+      }
+
+      const p = data.playlist || {};
+      const items = Array.isArray(data.items) ? data.items : [];
+
+      detailThumb.src = p.image || "https://spotify.jdge.cc/images/spotify_logo.png";
+      detailTitle.textContent = p.name || "Untitled playlist";
+
+      const infoBits = [];
+      if (typeof p.totalTracks === "number") infoBits.push(`${p.totalTracks} items`);
+      if (p.ownerLabel) infoBits.push(p.ownerLabel);
+      detailSub.textContent = infoBits.join(" • ");
+
+      tracklist.innerHTML = items.map(renderTrack).join("");
+
+      detailEmpty.style.display = "none";
+      detailView.style.display = "block";
+      setStatus("");
+    } catch (err) {
+      console.error(err);
+      setStatus(`Playlist load failed: ${String(err.message || err)}`);
     }
+  }
+
+  function renderTrack(t) {
+    const name = escapeHtml(t.name || "Untitled");
+    const artists = escapeHtml((t.artists || []).join(", "));
+    const url = t.url || "#";
+
+    // right side: show minutes for tracks/episodes
+    const ms = Number(t.durationMs) || 0;
+    const mins = ms ? `${Math.round(ms / 60000)}m` : "";
+
+    return `
+      <li class="track">
+        <div class="track-main">
+          <a class="track-name" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${name}</a>
+          <div class="track-meta">${artists}</div>
+        </div>
+        <div class="track-right">${escapeHtml(mins)}</div>
+      </li>
+    `;
   }
 
   async function refreshFromSpotify() {
+    buildShell();
     setButtonLoading(true);
-
-    if (statusMessage) statusMessage.textContent = "Refreshing from Spotify…";
-    if (noChangesSection) noChangesSection.hidden = true;
+    setStatus("Refreshing from Spotify…");
 
     try {
       const res = await fetch(API_REFRESH, {
@@ -68,255 +269,26 @@
 
       const text = await res.text();
       let data = null;
-      try {
-        data = text ? JSON.parse(text) : null;
-      } catch {
-        data = null;
-      }
+      try { data = text ? JSON.parse(text) : null; } catch {}
 
       if (!res.ok) {
-        const msg =
-          (data && (data.error || data.message || data.detail)) ||
-          text ||
-          `Request failed with status ${res.status}`;
+        const msg = (data && (data.error || data.message || data.detail)) || text || `HTTP ${res.status}`;
         throw new Error(msg);
       }
 
-      if (!data) throw new Error("No JSON returned from /api/refresh");
-
-      saveSnapshot(data);
-      renderData(data);
+      snapshot = data;
+      renderSnapshot(data);
+      setStatus("");
     } catch (err) {
       console.error(err);
-      setErrorState(`Couldn’t refresh from Spotify: ${String(err?.message || err)}`);
+      setStatus(`Refresh failed: ${String(err.message || err)}`);
     } finally {
       setButtonLoading(false);
     }
   }
 
-  function renderData(data) {
-    if (!data) {
-      setBlankState();
-      return;
-    }
-
-    const payload = data.data && typeof data.data === "object" ? data.data : data;
-
-    const playlists = Array.isArray(payload.playlists) ? payload.playlists : [];
-    const lastUpdated = payload.lastUpdated || payload.updatedAt || payload.timestamp || null;
-
-    const totalPlaylists =
-      typeof payload.totalPlaylists === "number" ? payload.totalPlaylists : playlists.length;
-
-    const totalNewTracks =
-      typeof payload.totalNewTracks === "number"
-        ? payload.totalNewTracks
-        : playlists.reduce((sum, p) => {
-            const c =
-              typeof p?.newTracksCount === "number"
-                ? p.newTracksCount
-                : Array.isArray(p?.newTracks)
-                  ? p.newTracks.length
-                  : 0;
-            return sum + c;
-          }, 0);
-
-    if (summarySection) summarySection.hidden = false;
-
-    if (totalPlaylistsEl) totalPlaylistsEl.textContent = String(totalPlaylists);
-    if (totalNewTracksEl) totalNewTracksEl.textContent = String(totalNewTracks);
-
-    if (lastUpdatedEl) {
-      if (lastUpdated) {
-        const d = new Date(lastUpdated);
-        lastUpdatedEl.textContent = isNaN(d.getTime())
-          ? String(lastUpdated)
-          : d.toLocaleString(undefined, {
-              year: "numeric",
-              month: "short",
-              day: "numeric",
-              hour: "2-digit",
-              minute: "2-digit"
-            });
-      } else {
-        lastUpdatedEl.textContent = "Not yet run";
-      }
-    }
-
-    if (!playlistsContainer) return;
-    playlistsContainer.innerHTML = "";
-
-    const playlistsWithNew = playlists.filter(
-      (p) => (p.newTracksCount || (p.newTracks && p.newTracks.length)) > 0
-    );
-
-    if (!playlistsWithNew.length) {
-      if (statusMessage) statusMessage.textContent = "Up to date.";
-      if (noChangesSection) noChangesSection.hidden = false;
-    } else {
-      if (statusMessage) statusMessage.textContent = "Here are the playlists with new songs:";
-      if (noChangesSection) noChangesSection.hidden = true;
-
-      playlistsWithNew.forEach((playlist) => {
-        const card = document.createElement("article");
-        card.className = "playlist-card";
-
-        const playlistUrl =
-          playlist.url ||
-          (playlist.id ? `https://open.spotify.com/playlist/${playlist.id}` : "#");
-
-        const imageUrl =
-          playlist.image || "https://spotify.jdge.cc/images/spotify_logo.png";
-
-        const newTracks = Array.isArray(playlist.newTracks) ? playlist.newTracks : [];
-        const newCount =
-          typeof playlist.newTracksCount === "number" ? playlist.newTracksCount : newTracks.length;
-
-        const tracksListHtml =
-          newTracks.length > 0
-            ? `<ul class="tracks-list">
-                ${newTracks
-                  .map((track) => {
-                    const artists = Array.isArray(track.artists)
-                      ? track.artists.join(", ")
-                      : track.artists || "";
-                    const trackUrl =
-                      track.url ||
-                      (track.id ? `https://open.spotify.com/track/${track.id}` : "#");
-                    const addedDate = track.addedAt ? new Date(track.addedAt) : null;
-                    const addedLabel =
-                      addedDate && !isNaN(addedDate.getTime())
-                        ? addedDate.toLocaleDateString(undefined, {
-                            year: "numeric",
-                            month: "short",
-                            day: "numeric"
-                          })
-                        : "";
-
-                    return `
-                      <li class="track">
-                        <div class="track-main">
-                          <a href="${trackUrl}" target="_blank" rel="noopener noreferrer" class="track-title">
-                            ${escapeHtml(track.name || "Untitled track")}
-                          </a>
-                          ${
-                            artists
-                              ? `<span class="track-artists">${escapeHtml(artists)}</span>`
-                              : ""
-                          }
-                        </div>
-                        ${
-                          addedLabel
-                            ? `<span class="track-added">Added ${addedLabel}</span>`
-                            : ""
-                        }
-                      </li>
-                    `;
-                  })
-                  .join("")}
-              </ul>`
-            : '<p class="muted">Track details not available for this playlist.</p>';
-
-        card.innerHTML = `
-          <div class="playlist-header">
-            <img src="${imageUrl}" alt="" class="playlist-image" loading="lazy">
-            <div class="playlist-meta">
-              <a href="${playlistUrl}" target="_blank" rel="noopener noreferrer" class="playlist-name">
-                ${escapeHtml(playlist.name || "Untitled playlist")}
-              </a>
-              <div class="playlist-meta-row">
-                ${
-                  typeof playlist.totalTracks === "number"
-                    ? `<span>${playlist.totalTracks} total tracks</span>`
-                    : ""
-                }
-                ${
-                  newCount
-                    ? `<span class="badge badge-new">${newCount} new ${
-                        newCount === 1 ? "song" : "songs"
-                      }</span>`
-                    : ""
-                }
-              </div>
-            </div>
-          </div>
-          ${tracksListHtml}
-        `;
-
-        playlistsContainer.appendChild(card);
-      });
-    }
-
-    renderTop(payload.top || payload.tops || payload);
-  }
-
-  function renderTop(data) {
-    if (!topsSection || !topArtistsList || !topTracksList) return;
-
-    const artists = Array.isArray(data.artists) ? data.artists : [];
-    const tracks = Array.isArray(data.tracks) ? data.tracks : [];
-
-    if (!artists.length && !tracks.length) {
-      topsSection.hidden = true;
-      return;
-    }
-
-    topsSection.hidden = false;
-
-    topArtistsList.innerHTML = artists
-      .map((a) => {
-        const img = a.image || "https://spotify.jdge.cc/images/spotify_logo.png";
-        const genres = (a.genres || []).slice(0, 2).join(", ");
-        const subtitle = genres || (a.followers ? `${Number(a.followers).toLocaleString()} followers` : "");
-        const url = a.url || "#";
-
-        return `
-          <li class="tops-item">
-            <img src="${img}" alt="" class="tops-avatar" loading="lazy">
-            <div class="tops-body">
-              <a href="${url}" target="_blank" rel="noopener noreferrer" class="tops-title">
-                ${escapeHtml(a.name || "Unknown artist")}
-              </a>
-              ${subtitle ? `<span class="tops-subtitle">${escapeHtml(subtitle)}</span>` : ""}
-            </div>
-          </li>
-        `;
-      })
-      .join("");
-
-    topTracksList.innerHTML = tracks
-      .map((t) => {
-        const img = t.albumImage || "https://spotify.jdge.cc/images/spotify_logo.png";
-        const artistsStr = (t.artists || []).join(", ");
-        const subtitle = artistsStr || t.album || "";
-        const url = t.url || "#";
-
-        return `
-          <li class="tops-item">
-            <img src="${img}" alt="" class="tops-avatar" loading="lazy">
-            <div class="tops-body">
-              <a href="${url}" target="_blank" rel="noopener noreferrer" class="tops-title">
-                ${escapeHtml(t.name || "Unknown track")}
-              </a>
-              ${subtitle ? `<span class="tops-subtitle">${escapeHtml(subtitle)}</span>` : ""}
-            </div>
-          </li>
-        `;
-      })
-      .join("");
-  }
-
-  function escapeHtml(str) {
-    return String(str)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#39;");
-  }
-
   document.addEventListener("DOMContentLoaded", () => {
-    setBlankState();
+    blankUntilClick();
     if (refreshButton) refreshButton.addEventListener("click", refreshFromSpotify);
   });
 })();
