@@ -5,8 +5,6 @@
   const refreshButton = document.getElementById("refreshButton");
   const appMain = document.getElementById("appMain");
 
-  let snapshot = null;
-
   function setButtonLoading(isLoading) {
     if (!refreshButton) return;
     refreshButton.disabled = isLoading;
@@ -83,10 +81,10 @@
 
         <aside class="panel" id="rightPanel">
           <div class="panel-header">
-            <h2 class="panel-title">Special</h2>
+            <h2 class="panel-title">Others playlists</h2>
           </div>
           <div class="panel-body">
-            <div class="menu" id="specialMenu"></div>
+            <div class="menu" id="othersMenu"></div>
           </div>
         </aside>
       </div>
@@ -102,8 +100,7 @@
   function cardHtml(p) {
     const img = p.image || "https://spotify.jdge.cc/images/spotify_logo.png";
     const count = typeof p.totalTracks === "number" ? `${p.totalTracks} items` : "";
-    const owner = p.ownerIsMe === false ? "by others" : "";
-    const sub = [count, owner].filter(Boolean).join(" • ");
+    const sub = [count].filter(Boolean).join(" • ");
 
     return `
       <div class="card" data-playlist-id="${escapeHtml(p.id)}">
@@ -142,15 +139,14 @@
   function renderSnapshot(data) {
     const totals = data?.totals || {};
     const sections = data?.sections || {};
-    const specials = Array.isArray(data?.specials) ? data.specials : [];
+    const othersPlaylists = Array.isArray(data?.othersPlaylists) ? data.othersPlaylists : [];
 
     const summaryGrid = document.getElementById("summaryGrid");
     const accordion = document.getElementById("accordion");
-    const specialMenu = document.getElementById("specialMenu");
+    const othersMenu = document.getElementById("othersMenu");
 
-    if (!summaryGrid || !accordion || !specialMenu) return;
+    if (!summaryGrid || !accordion || !othersMenu) return;
 
-    // Summary: your new top stats
     summaryGrid.innerHTML = `
       <div class="summary-card"><h2>Total playlists</h2><p class="summary-value">${totals.playlists ?? "–"}</p></div>
       <div class="summary-card"><h2>Total songs</h2><p class="summary-value">${totals.songs ?? "–"}</p></div>
@@ -160,20 +156,18 @@
       <div class="summary-card"><h2>Last updated</h2><p class="summary-value">${fmtDate(data.lastUpdated)}</p></div>
     `;
 
-    // Accordion: default open should be the main set.
     accordion.innerHTML = "";
-    accordion.appendChild(makeAcc("Playlists", sections.other ? [...(sections.dailyMix||[]), ...(sections.top||[]), ...(sections.other||[])] : [], true));
+    accordion.appendChild(makeAcc("Playlists", [...(sections.dailyMix||[]), ...(sections.top||[]), ...(sections.other||[])], true));
     accordion.appendChild(makeAcc("Daily Mix", sections.dailyMix || [], false));
     accordion.appendChild(makeAcc("Top", sections.top || [], false));
     accordion.appendChild(makeAcc("Other", sections.other || [], false));
 
-    // Special menu (right)
-    specialMenu.innerHTML = specials.length
-      ? specials.map(cardHtml).join("")
-      : `<div style="color:var(--muted);font-size:.9rem">No special playlists found.</div>`;
+    othersMenu.innerHTML = othersPlaylists.length
+      ? othersPlaylists.map(cardHtml).join("")
+      : `<div style="color:var(--muted);font-size:.9rem">No “others” playlists have been added yet.</div>`;
 
-    // Wire clicks
     wireCardClicks();
+    setStatus("");
   }
 
   function wireCardClicks() {
@@ -240,8 +234,6 @@
     const name = escapeHtml(t.name || "Untitled");
     const artists = escapeHtml((t.artists || []).join(", "));
     const url = t.url || "#";
-
-    // right side: show minutes for tracks/episodes
     const ms = Number(t.durationMs) || 0;
     const mins = ms ? `${Math.round(ms / 60000)}m` : "";
 
@@ -276,9 +268,7 @@
         throw new Error(msg);
       }
 
-      snapshot = data;
       renderSnapshot(data);
-      setStatus("");
     } catch (err) {
       console.error(err);
       setStatus(`Refresh failed: ${String(err.message || err)}`);

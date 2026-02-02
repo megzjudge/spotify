@@ -10,21 +10,35 @@ export async function onRequestPost({ env, request }) {
      * CONFIG (EDIT HERE)
      ***********************/
 
-    // HARD-CODED private podcast playlist ID (allowed even if private)
-    const PODCAST_PLAYLIST_ID = "2tHrihmpYzDbJ8rit7HtFR";
+    // 1) Hard-coded private podcast playlist ID (allowed even if private)
+    const PODCAST_PLAYLIST_ID = "PUT_PODCAST_PLAYLIST_ID_HERE";
+
+    // 2) Manually-curated "others / temporary" playlists you want in the right panel.
+    // Put playlist IDs here (from https://open.spotify.com/playlist/<ID>)
+    const OTHERS_PLAYLIST_IDS = [
+      // "37i9dQZF1DX....",
+      // "0A1B2C3D4E5F...."
+    ];
+
+    // 3) Wrapped / special Spotify-made playlist(s) you want separated
+    // (You can do by NAME, or better: add its ID into OTHERS_PLAYLIST_IDS too)
+    const WRAPPED_PLAYLIST_NAMES = [
+      "Your Top Songs 2025"
+    ];
 
     // Safety limits
     const MAX_PLAYLISTS = clampInt(body?.maxPlaylists, 1, 200, 80);
     const MAX_TRACKS_PER_PLAYLIST = clampInt(body?.maxTracksPerPlaylist, 1, 500, 200);
 
-    // Naming-based exclusions
+    // Naming-based exclusions (since Spotify does NOT expose folder membership)
     const NOT_PUBLIC_PREFIXES = ["NP:", "[Not Public]"];
     const NOT_PUBLIC_TAG = "#notpublic";
 
-    // Spotify-created / special playlists
-    const SPECIAL_PLAYLIST_NAMES = [
-      "Your Top Songs 2025"
-    ];
+    // All allowlisted IDs that should be included no matter what
+    const ALLOWLIST_IDS = new Set([
+      PODCAST_PLAYLIST_ID,
+      ...OTHERS_PLAYLIST_IDS
+    ].filter(Boolean));
 
     /***********************
      * FETCH USER + PLAYLISTS
@@ -38,13 +52,13 @@ export async function onRequestPost({ env, request }) {
      * FILTER PLAYLISTS
      ***********************/
     const filtered = playlistsRaw.filter((p) => {
-      // Always include the podcast playlist, even if private
-      if (p.id === PODCAST_PLAYLIST_ID) return true;
+      // Always include allowlisted playlists (podcast + manually-added others)
+      if (ALLOWLIST_IDS.has(p.id)) return true;
 
       // Exclude private playlists by default
       if (p.public === false) return false;
 
-      // Exclude naming/description rules
+      // Exclude "Not Public" naming/description rules
       const name = (p.name || "").trim();
       const desc = (p.description || "").toLowerCase();
 
@@ -62,17 +76,26 @@ export async function onRequestPost({ env, request }) {
     );
 
     /***********************
-     * SPECIALS (RIGHT MENU)
+     * OTHERS PLAYLISTS (RIGHT MENU)
+     * - ONLY those you manually added (IDs)
+     * - PLUS Wrapped playlists (by name)
      ***********************/
-    const specials = normalized.filter((p) => {
-      if (SPECIAL_PLAYLIST_NAMES.includes(p.name)) return true;
-      if (p.ownerIsMe === false) return true; // created by others
+    const othersPlaylists = normalized.filter((p) => {
+      if (ALLOWLIST_IDS.has(p.id) && p.id !== PODCAST_PLAYLIST_ID) return true;
+      if (WRAPPED_PLAYLIST_NAMES.includes(p.name)) return true;
       return false;
     });
 
-    const normal = normalized.filter(
-      (p) => !specials.some((s) => s.id === p.id)
-    );
+    /***********************
+     * NORMAL LIBRARY (LEFT)
+     * - everything except the right-menu "others"
+     * - and except podcast playlist (we use it for metrics)
+     ***********************/
+    const normal = normalized.filter((p) => {
+      if (p.id === PODCAST_PLAYLIST_ID) return false;
+      if (othersPlaylists.some((x) => x.id === p.id)) return false;
+      return true;
+    });
 
     /***********************
      * SECTIONS (YOUR PLAYLISTS)
@@ -92,13 +115,11 @@ export async function onRequestPost({ env, request }) {
     );
 
     /***********************
-     * PODCAST PLAYLIST
+     * PODCAST PLAYLIST (metrics only)
      ***********************/
-    const podcast = normal.find((p) => p.id === PODCAST_PLAYLIST_ID) || null;
+    const podcast = normalized.find((p) => p.id === PODCAST_PLAYLIST_ID) || null;
 
-    const songPlaylists = podcast
-      ? normal.filter((p) => p.id !== podcast.id)
-      : normal;
+    const songPlaylists = normal;
 
     /***********************
      * METRICS
@@ -146,7 +167,8 @@ export async function onRequestPost({ env, request }) {
         other
       },
 
-      specials
+      // Right menu
+      othersPlaylists
     });
 
   } catch (err) {
