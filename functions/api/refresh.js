@@ -1,4 +1,5 @@
 // functions/api/refresh.js
+
 export async function onRequestPost(context) {
   try {
     const { env, request } = context;
@@ -12,10 +13,10 @@ export async function onRequestPost(context) {
       // no body is fine
     }
 
-    const token = await getAppToken(env);
+    const token = await getUserAccessToken(env);
 
-    // 1) Get playlists for user (PUBLIC playlists only with client credentials)
-    const playlists = await fetchAllUserPlaylists(token, env.SPOTIFY_USER);
+    // 1) Get playlists for the authorized user
+    const playlists = await fetchAllMyPlaylists(token);
 
     // 2) For each playlist, fetch items + normalize
     const normalized = [];
@@ -40,18 +41,33 @@ export async function onRequestPost(context) {
   } catch (err) {
     console.error(err);
     return json(
-      { error: "Refresh failed", detail: String(err?.message || err) },
+      {
+        error: "Refresh failed",
+        message: String(err?.message || err),
+        detail: String(err?.stack || "")
+      },
       500
     );
   }
 }
 
-async function getAppToken(env) {
-  const clientId = env.SPOTIFY_PROFILE; // Client ID
-  const clientSecret = env.SPOTIFY_KEY; // Client Secret
+/**
+ * Uses refresh token -> access token (user-scoped).
+ * Requires secrets:
+ *  - SPOTIFY_PROFILE (client id)
+ *  - SPOTIFY_KEY (client secret)
+ *  - SPOTIFY_REFRESH_TOKEN (refresh token)
+ */
+async function getUserAccessToken(env) {
+  const clientId = env.SPOTIFY_PROFILE;
+  const clientSecret = env.SPOTIFY_KEY;
+  const refreshToken = env.SPOTIFY_REFRESH_TOKEN;
 
   if (!clientId || !clientSecret) {
     throw new Error("Missing SPOTIFY_PROFILE (client id) or SPOTIFY_KEY (client secret)");
+  }
+  if (!refreshToken) {
+    throw new Error("Missing SPOTIFY_REFRESH_TOKEN (refresh token)");
   }
 
   const res = await fetch("https://accounts.spotify.com/api/token", {
@@ -60,36 +76,49 @@ async function getAppToken(env) {
       Authorization: "Basic " + btoa(`${clientId}:${clientSecret}`),
       "Content-Type": "application/x-www-form-urlencoded"
     },
-    body: "grant_type=client_credentials"
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: refreshToken
+    })
   });
 
-  if (!res.ok) throw new Error(`Token request failed: ${res.status} ${await safeText(res)}`);
+  const text = await safeText(res);
+  let data = null;
+  try { data = JSON.parse(text); } catch {}
 
-  const data = await res.json();
+  if (!res.ok) {
+    // Spotify often returns: { error, error_description }
+    throw new Error(data?.error_description || data?.error || `Token refresh failed: ${res.status} ${text}`);
+  }
+
+  if (!data?.access_token) {
+    throw new Error("Token refresh succeeded but no access_token returned");
+  }
+
   return data.access_token;
 }
 
-async function fetchAllUserPlaylists(token, userId) {
-  if (!userId) throw new Error("Missing SPOTIFY_USER (spotify user id)");
-
+async function fetchAllMyPlaylists(token) {
   let items = [];
-  let next = `https://api.spotify.com/v1/users/${encodeURIComponent(userId)}/playlists?limit=50`;
+  let next = "https://api.spotify.com/v1/me/playlists?limit=50";
 
   while (next) {
     const res = await fetch(next, {
       headers: { Authorization: `Bearer ${token}` }
     });
+
+    const text = await safeText(res);
+    let data = null;
+    try { data = JSON.parse(text); } catch {}
+
     if (!res.ok) {
-      throw new Error(`User playlists fetch failed: ${res.status} ${await safeText(res)}`);
+      throw new Error(`My playlists fetch failed: ${res.status} ${text}`);
     }
 
-    const data = await res.json();
-    items = items.concat(data.items || []);
-    next = data.next;
+    items = items.concat(data?.items || []);
+    next = data?.next;
   }
 
-  // You can filter here if you only want certain playlists:
-  // return items.filter(p => p.name?.includes("Finished"))
   return items;
 }
 
@@ -101,13 +130,17 @@ async function fetchAllPlaylistItems(token, playlistId) {
     const res = await fetch(next, {
       headers: { Authorization: `Bearer ${token}` }
     });
+
+    const text = await safeText(res);
+    let data = null;
+    try { data = JSON.parse(text); } catch {}
+
     if (!res.ok) {
-      throw new Error(`Playlist items fetch failed (${playlistId}): ${res.status} ${await safeText(res)}`);
+      throw new Error(`Playlist items fetch failed (${playlistId}): ${res.status} ${text}`);
     }
 
-    const data = await res.json();
-    items = items.concat(data.items || []);
-    next = data.next;
+    items = items.concat(data?.items || []);
+    next = data?.next;
   }
 
   return items;
@@ -166,6 +199,7 @@ function json(obj, status = 200) {
     status,
     headers: {
       "Content-Type": "application/json; charset=utf-8",
+      // Same-origin in Pages, but CORS headers don't hurt
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type,Accept"

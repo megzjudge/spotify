@@ -1,17 +1,8 @@
 // script.js
 (() => {
-  /***********************
-   * CONFIG
-   ***********************/
-  // Cloudflare Pages Functions are same-origin, so no base URL.
-  const API_REFRESH = "/api/refresh"; // POST -> returns latest snapshot JSON
-
-  // Local storage key (client-side cache only)
+  const API_REFRESH = "/api/refresh";
   const LS_KEY = "spotify_snapshot_v1";
 
-  /***********************
-   * DOM
-   ***********************/
   const refreshButton = document.getElementById("refreshButton");
   const statusMessage = document.getElementById("statusMessage");
   const summarySection = document.getElementById("summarySection");
@@ -26,9 +17,6 @@
   const topArtistsList = document.getElementById("topArtistsList");
   const topTracksList = document.getElementById("topTracksList");
 
-  /***********************
-   * UI helpers
-   ***********************/
   function setButtonLoading(isLoading) {
     if (!refreshButton) return;
     refreshButton.disabled = isLoading;
@@ -36,9 +24,9 @@
   }
 
   function setBlankState() {
-    // Page is intentionally "blank" until user clicks refresh
     if (statusMessage) {
-      statusMessage.textContent = "Click “Refresh from Spotify” to pull the latest playlist data.";
+      statusMessage.textContent =
+        "Click “Refresh from Spotify” to pull the latest playlist data.";
     }
     if (summarySection) summarySection.hidden = true;
     if (noChangesSection) noChangesSection.hidden = true;
@@ -58,21 +46,14 @@
     if (topsSection) topsSection.hidden = true;
   }
 
-  /***********************
-   * Storage
-   ***********************/
   function saveSnapshot(data) {
     try {
       localStorage.setItem(LS_KEY, JSON.stringify(data));
     } catch (e) {
-      // Ignore storage failures (private mode, quota, etc.)
       console.warn("Failed to save snapshot to localStorage", e);
     }
   }
 
-  /***********************
-   * API
-   ***********************/
   async function refreshFromSpotify() {
     setButtonLoading(true);
 
@@ -82,12 +63,9 @@
     try {
       const res = await fetch(API_REFRESH, {
         method: "POST",
-        headers: {
-          Accept: "application/json"
-        }
+        headers: { Accept: "application/json" }
       });
 
-      // Try to parse JSON either way for better error reporting
       const text = await res.text();
       let data = null;
       try {
@@ -98,43 +76,35 @@
 
       if (!res.ok) {
         const msg =
-          (data && (data.error || data.message)) ||
+          (data && (data.error || data.message || data.detail)) ||
+          text ||
           `Request failed with status ${res.status}`;
         throw new Error(msg);
       }
 
-      if (!data) {
-        throw new Error("No JSON returned from /api/refresh");
-      }
+      if (!data) throw new Error("No JSON returned from /api/refresh");
 
       saveSnapshot(data);
       renderData(data);
     } catch (err) {
       console.error(err);
-      setErrorState(
-        "Couldn’t refresh from Spotify. Check your Pages Function logs and try again."
-      );
+      setErrorState(`Couldn’t refresh from Spotify: ${String(err?.message || err)}`);
     } finally {
       setButtonLoading(false);
     }
   }
 
-  /***********************
-   * Rendering
-   ***********************/
   function renderData(data) {
     if (!data) {
       setBlankState();
       return;
     }
 
-    // Accept either direct fields or nested payloads; be tolerant.
     const payload = data.data && typeof data.data === "object" ? data.data : data;
 
     const playlists = Array.isArray(payload.playlists) ? payload.playlists : [];
     const lastUpdated = payload.lastUpdated || payload.updatedAt || payload.timestamp || null;
 
-    // If totals not provided, compute best-effort.
     const totalPlaylists =
       typeof payload.totalPlaylists === "number" ? payload.totalPlaylists : playlists.length;
 
@@ -176,7 +146,6 @@
     if (!playlistsContainer) return;
     playlistsContainer.innerHTML = "";
 
-    // Only show playlists that actually have new tracks
     const playlistsWithNew = playlists.filter(
       (p) => (p.newTracksCount || (p.newTracks && p.newTracks.length)) > 0
     );
@@ -278,7 +247,6 @@
       });
     }
 
-    // Tops are optional; only render if present in payload
     renderTop(payload.top || payload.tops || payload);
   }
 
@@ -347,16 +315,8 @@
       .replace(/'/g, "&#39;");
   }
 
-  /***********************
-   * Boot
-   ***********************/
   document.addEventListener("DOMContentLoaded", () => {
     setBlankState();
-
-    if (refreshButton) {
-      refreshButton.addEventListener("click", () => {
-        refreshFromSpotify();
-      });
-    }
+    if (refreshButton) refreshButton.addEventListener("click", refreshFromSpotify);
   });
 })();
