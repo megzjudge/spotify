@@ -4,44 +4,47 @@ export async function onRequestPost({ env, request }) {
     let body = {};
     try { body = await request.json(); } catch {}
 
-    const token = await getUserAccessToken(env);
+    const accessToken = await getUserAccessToken(env);
 
-    // =========================
-    // CONFIG / RULES
-    // =========================
+    /***********************
+     * CONFIG (EDIT HERE)
+     ***********************/
+
+    // HARD-CODED private podcast playlist ID (allowed even if private)
+    const PODCAST_PLAYLIST_ID = "2tHrihmpYzDbJ8rit7HtFR";
+
+    // Safety limits
     const MAX_PLAYLISTS = clampInt(body?.maxPlaylists, 1, 200, 80);
     const MAX_TRACKS_PER_PLAYLIST = clampInt(body?.maxTracksPerPlaylist, 1, 500, 200);
 
-    const PODCAST_PLAYLIST_ID = env.SPOTIFY_PODCAST_PLAYLIST_ID || null;
-
+    // Naming-based exclusions
     const NOT_PUBLIC_PREFIXES = ["NP:", "[Not Public]"];
     const NOT_PUBLIC_TAG = "#notpublic";
 
+    // Spotify-created / special playlists
     const SPECIAL_PLAYLIST_NAMES = [
       "Your Top Songs 2025"
     ];
 
-    // =========================
-    // Fetch user + playlists
-    // =========================
-    const me = await fetchMe(token);
+    /***********************
+     * FETCH USER + PLAYLISTS
+     ***********************/
+    const me = await fetchMe(accessToken);
     const myUserId = me?.id || null;
 
-    const playlistsRaw = await fetchMyPlaylists(token, MAX_PLAYLISTS);
+    const playlistsRaw = await fetchMyPlaylists(accessToken, MAX_PLAYLISTS);
 
-    // =========================
-    // Filter playlists
-    // =========================
+    /***********************
+     * FILTER PLAYLISTS
+     ***********************/
     const filtered = playlistsRaw.filter((p) => {
       // Always include the podcast playlist, even if private
-      if (PODCAST_PLAYLIST_ID && p.id === PODCAST_PLAYLIST_ID) {
-        return true;
-      }
+      if (p.id === PODCAST_PLAYLIST_ID) return true;
 
-      // Exclude all other private playlists
+      // Exclude private playlists by default
       if (p.public === false) return false;
 
-      // Exclude explicit "Not Public" naming rules
+      // Exclude naming/description rules
       const name = (p.name || "").trim();
       const desc = (p.description || "").toLowerCase();
 
@@ -51,30 +54,29 @@ export async function onRequestPost({ env, request }) {
       return true;
     });
 
-    // =========================
-    // Normalize metadata
-    // =========================
+    /***********************
+     * NORMALIZE PLAYLIST META
+     ***********************/
     const normalized = filtered.map((p) =>
       normalizePlaylistMeta(p, myUserId)
     );
 
-    // =========================
-    // Specials (right menu)
-    // =========================
+    /***********************
+     * SPECIALS (RIGHT MENU)
+     ***********************/
     const specials = normalized.filter((p) => {
       if (SPECIAL_PLAYLIST_NAMES.includes(p.name)) return true;
       if (p.ownerIsMe === false) return true; // created by others
       return false;
     });
 
-    // Normal playlists exclude specials
     const normal = normalized.filter(
       (p) => !specials.some((s) => s.id === p.id)
     );
 
-    // =========================
-    // Sections (your playlists)
-    // =========================
+    /***********************
+     * SECTIONS (YOUR PLAYLISTS)
+     ***********************/
     const dailyMix = normal.filter(
       (p) => p.ownerIsMe && p.name.startsWith("Daily Mix:")
     );
@@ -89,27 +91,25 @@ export async function onRequestPost({ env, request }) {
         !top.some((x) => x.id === p.id)
     );
 
-    // =========================
-    // Podcast playlist (by ID)
-    // =========================
-    const podcast = PODCAST_PLAYLIST_ID
-      ? normal.find((p) => p.id === PODCAST_PLAYLIST_ID)
-      : null;
+    /***********************
+     * PODCAST PLAYLIST
+     ***********************/
+    const podcast = normal.find((p) => p.id === PODCAST_PLAYLIST_ID) || null;
 
     const songPlaylists = podcast
       ? normal.filter((p) => p.id !== podcast.id)
       : normal;
 
-    // =========================
-    // Metrics
-    // =========================
+    /***********************
+     * METRICS
+     ***********************/
     const totalSongs = sum(songPlaylists.map((p) => p.totalTracks || 0));
     const podcastEpisodes = podcast?.totalTracks ?? 0;
 
     let totalSongMs = 0;
     for (const p of songPlaylists) {
       const items = await fetchPlaylistItemsBounded(
-        token,
+        accessToken,
         p.id,
         MAX_TRACKS_PER_PLAYLIST
       );
@@ -119,42 +119,42 @@ export async function onRequestPost({ env, request }) {
     let podcastMs = 0;
     if (podcast) {
       const items = await fetchPlaylistItemsBounded(
-        token,
+        accessToken,
         podcast.id,
         MAX_TRACKS_PER_PLAYLIST
       );
       podcastMs = sum(items.map(msFromItem));
     }
 
-    // =========================
-    // Response
-    // =========================
-    return json(
-      {
-        lastUpdated: new Date().toISOString(),
-        totalPlaylists: normal.length,
-        metrics: {
-          totalSongs,
-          totalSongMs,
-          podcastEpisodes,
-          podcastMs
-        },
-        sections: {
-          all: normal,
-          dailyMix,
-          top,
-          other
-        },
-        specials
+    /***********************
+     * RESPONSE
+     ***********************/
+    return json({
+      lastUpdated: new Date().toISOString(),
+
+      totals: {
+        playlists: normal.length,
+        songs: totalSongs,
+        songMs: totalSongMs,
+        podcastEpisodes,
+        podcastMs
       },
-      200
-    );
+
+      sections: {
+        dailyMix,
+        top,
+        other
+      },
+
+      specials
+    });
+
   } catch (err) {
     return json(
       {
         error: "Refresh failed",
         message: String(err?.message || err),
-        detail: String(err?.stack || "")
+        stack: String(err?.stack || "")
       },
       500
     );
@@ -170,7 +170,7 @@ async function getUserAccessToken(env) {
   const refreshToken = env.SPOTIFY_REFRESH_TOKEN;
 
   if (!clientId || !clientSecret || !refreshToken) {
-    throw new Error("Missing Spotify secrets");
+    throw new Error("Missing Spotify OAuth secrets");
   }
 
   const res = await fetch("https://accounts.spotify.com/api/token", {
@@ -185,17 +185,9 @@ async function getUserAccessToken(env) {
     })
   });
 
-  const text = await res.text();
-  let data = null;
-  try { data = JSON.parse(text); } catch {}
-
-  if (!res.ok) {
-    throw new Error(
-      `Token refresh failed (${res.status}): ${data?.error_description || text}`
-    );
-  }
-  if (!data?.access_token) {
-    throw new Error("No access_token returned");
+  const data = await res.json();
+  if (!res.ok || !data?.access_token) {
+    throw new Error("Failed to refresh Spotify access token");
   }
 
   return data.access_token;
@@ -208,11 +200,8 @@ async function fetchMe(token) {
   const res = await fetch("https://api.spotify.com/v1/me", {
     headers: { Authorization: `Bearer ${token}` }
   });
-  const text = await res.text();
-  let data = null;
-  try { data = JSON.parse(text); } catch {}
-  if (!res.ok) throw new Error(`Fetch me failed (${res.status}): ${text}`);
-  return data;
+  if (!res.ok) throw new Error("Failed to fetch user profile");
+  return res.json();
 }
 
 async function fetchMyPlaylists(token, limit) {
@@ -223,13 +212,10 @@ async function fetchMyPlaylists(token, limit) {
     const res = await fetch(next, {
       headers: { Authorization: `Bearer ${token}` }
     });
-    const text = await res.text();
-    let data = null;
-    try { data = JSON.parse(text); } catch {}
-    if (!res.ok) throw new Error(`Playlists fetch failed (${res.status}): ${text}`);
-
-    items = items.concat(data?.items || []);
-    next = data?.next || null;
+    if (!res.ok) throw new Error("Failed to fetch playlists");
+    const data = await res.json();
+    items = items.concat(data.items || []);
+    next = data.next;
   }
 
   return items.slice(0, limit);
@@ -237,36 +223,26 @@ async function fetchMyPlaylists(token, limit) {
 
 async function fetchPlaylistItemsBounded(token, playlistId, maxItems) {
   let items = [];
-  let next = `https://api.spotify.com/v1/playlists/${encodeURIComponent(
-    playlistId
-  )}/tracks?limit=100`;
+  let next = `https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=100`;
 
   while (next && items.length < maxItems) {
     const res = await fetch(next, {
       headers: { Authorization: `Bearer ${token}` }
     });
-    const text = await res.text();
-    let data = null;
-    try { data = JSON.parse(text); } catch {}
-    if (!res.ok) {
-      throw new Error(
-        `Playlist items failed (${playlistId}) (${res.status}): ${text}`
-      );
-    }
-
-    items = items.concat(data?.items || []);
-    next = data?.next || null;
+    if (!res.ok) throw new Error(`Failed to fetch tracks for ${playlistId}`);
+    const data = await res.json();
+    items = items.concat(data.items || []);
+    next = data.next;
   }
 
   return items.slice(0, maxItems);
 }
 
 /* =========================
-   NORMALIZATION / METRICS
+   NORMALIZATION
 ========================= */
 function normalizePlaylistMeta(p, myUserId) {
   const ownerId = p.owner?.id || null;
-  const ownerName = p.owner?.display_name || ownerId || "";
   const ownerIsMe = myUserId ? ownerId === myUserId : null;
 
   return {
@@ -275,7 +251,6 @@ function normalizePlaylistMeta(p, myUserId) {
     image: p.images?.[0]?.url || null,
     url: p.external_urls?.spotify || null,
     totalTracks: p.tracks?.total ?? 0,
-    ownerLabel: ownerName ? `by ${ownerName}` : "",
     ownerIsMe
   };
 }
@@ -287,9 +262,7 @@ function msFromItem(it) {
 }
 
 function sum(arr) {
-  let s = 0;
-  for (const n of arr) s += Number(n) || 0;
-  return s;
+  return arr.reduce((a, b) => a + (Number(b) || 0), 0);
 }
 
 function clampInt(v, min, max, fallback) {
@@ -305,7 +278,7 @@ function json(obj, status = 200) {
   return new Response(JSON.stringify(obj, null, 2), {
     status,
     headers: {
-      "content-type": "application/json; charset=utf-8"
+      "Content-Type": "application/json; charset=utf-8"
     }
   });
 }
