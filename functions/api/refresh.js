@@ -9,11 +9,8 @@ export async function onRequestPost({ env, request }) {
     /***********************
      * CONFIG (EDIT HERE)
      ***********************/
-
-    // 1) Hard-coded private podcast playlist ID (allowed even if private)
     const PODCAST_PLAYLIST_ID = "2tHrihmpYzDbJ8rit7HtFR";
 
-    // 2) Manually-curated playlists NOT owned by you (you want these shown separately)
     const OTHERS_PLAYLIST_IDS = [
       "71z6BdHlnfNj4DKRhuu1Fk",
       "7jYNznHoIYgJBzwT5jpoOe",
@@ -22,21 +19,16 @@ export async function onRequestPost({ env, request }) {
       "37i9dQZF1EQnsJ0xmvpihE"
     ];
 
-    // 3) Year summary playlist(s) – add one per year
     const YEAR_SUMMARY_PLAYLIST_IDS = [
       "37i9dQZEVXcXHWVVT0lfDq" // 2025
     ];
 
-    // Safety limits
     const MAX_PLAYLISTS = clampInt(body?.maxPlaylists, 1, 200, 120);
     const MAX_TRACKS_PER_PLAYLIST = clampInt(body?.maxTracksPerPlaylist, 1, 500, 250);
 
-    // Naming-based exclusions (Spotify does NOT expose folder membership)
-    // Use one of these rules to mark playlists you don't want pulled.
     const NOT_PUBLIC_PREFIXES = ["NP:", "[Not Public]"];
     const NOT_PUBLIC_TAG = "#notpublic";
 
-    // Allowlisted IDs that should always be included (even if private, even if not owned by you)
     const ALLOWLIST_IDS = new Set(
       [
         PODCAST_PLAYLIST_ID,
@@ -52,19 +44,33 @@ export async function onRequestPost({ env, request }) {
     const myUserId = me?.id || null;
     if (!myUserId) throw new Error("Could not resolve /me id from Spotify.");
 
-    const playlistsRaw = await fetchMyPlaylists(accessToken, MAX_PLAYLISTS);
+    // 1) Load normal library playlists
+    let playlistsRaw = await fetchMyPlaylists(accessToken, MAX_PLAYLISTS);
+
+    // 2) IMPORTANT FIX: explicitly fetch allowlisted playlists by ID
+    // because /me/playlists may not include them unless followed/saved.
+    const seen = new Set((playlistsRaw || []).map(p => p?.id).filter(Boolean));
+    for (const id of ALLOWLIST_IDS) {
+      if (!id || seen.has(id)) continue;
+      try {
+        const pl = await fetchPlaylist(accessToken, id);
+        if (pl?.id) {
+          playlistsRaw.push(pl);
+          seen.add(pl.id);
+        }
+      } catch {
+        // ignore individual failures; UI will just show missing
+      }
+    }
 
     /***********************
      * FILTER PLAYLISTS
-     ***********************
-     * Rules:
-     * - Always include allowlist IDs (podcast + manual others + year summary)
-     * - Otherwise: only include playlists owned by you
-     * - Otherwise: exclude private playlists (public === false)
-     * - Otherwise: exclude by Not Public naming/tag rules
      ***********************/
     const filtered = playlistsRaw.filter((p) => {
       if (!p?.id) return false;
+
+      // explicit force exclude
+      if (FORCE_EXCLUDE_PLAYLIST_IDS.includes(p.id)) return false;
 
       // Always include allowlisted playlists
       if (ALLOWLIST_IDS.has(p.id)) return true;
@@ -94,22 +100,13 @@ export async function onRequestPost({ env, request }) {
     /***********************
      * SPECIAL BUCKETS
      ***********************/
-    const podcastPlaylist =
-      normalized.find((p) => p.id === PODCAST_PLAYLIST_ID) || null;
+    const podcastPlaylist = normalized.find((p) => p.id === PODCAST_PLAYLIST_ID) || null;
 
-    // Manual “Others playlists” (not yours, temporary, etc)
-    const othersPlaylists =
-      normalized.filter((p) => OTHERS_PLAYLIST_IDS.includes(p.id));
-
-    // Year summary playlists (Spotify-made; you add one per year)
-    const yearSummaryPlaylists =
-      normalized.filter((p) => YEAR_SUMMARY_PLAYLIST_IDS.includes(p.id));
+    const othersPlaylists = normalized.filter((p) => OTHERS_PLAYLIST_IDS.includes(p.id));
+    const yearSummaryPlaylists = normalized.filter((p) => YEAR_SUMMARY_PLAYLIST_IDS.includes(p.id));
 
     /***********************
      * NORMAL LIBRARY (YOUR PLAYLISTS)
-     * - owned by you
-     * - excludes podcast playlist
-     * - excludes "others" and "year summary"
      ***********************/
     const normal = normalized.filter((p) => {
       if (p.id === PODCAST_PLAYLIST_ID) return false;
@@ -132,9 +129,6 @@ export async function onRequestPost({ env, request }) {
 
     /***********************
      * METRICS
-     * - Total playlists: your normal playlists (exclude podcast / others / year summary)
-     * - Total songs + hours: computed from normal playlists ONLY (excludes podcast)
-     * - Podcast episodes + hours: computed ONLY from podcast playlist
      ***********************/
     const totalSongs = sum(normal.map((p) => p.totalTracks || 0));
 
@@ -172,11 +166,8 @@ export async function onRequestPost({ env, request }) {
         other
       },
 
-      // Separate blocks (UI uses these as separate panels)
       othersPlaylists,
       yearSummaryPlaylists,
-
-      // Useful for UI to render podcast panel header without extra calls
       podcastPlaylist
     });
 
@@ -235,6 +226,14 @@ async function fetchMe(token) {
   return res.json();
 }
 
+async function fetchPlaylist(token, playlistId) {
+  const res = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  if (!res.ok) throw new Error(`Failed to fetch playlist ${playlistId} (${res.status}).`);
+  return res.json();
+}
+
 async function fetchMyPlaylists(token, limit) {
   let items = [];
   let next = "https://api.spotify.com/v1/me/playlists?limit=50";
@@ -274,6 +273,7 @@ async function fetchPlaylistItemsBounded(token, playlistId, maxItems) {
 ========================= */
 function normalizePlaylistMeta(p, myUserId) {
   const ownerId = p.owner?.id || null;
+  const ownerName = p.owner?.display_name || null;
   const ownerIsMe = ownerId && myUserId ? ownerId === myUserId : false;
 
   return {
@@ -282,17 +282,17 @@ function normalizePlaylistMeta(p, myUserId) {
     image: p.images?.[0]?.url || null,
     url: p.external_urls?.spotify || null,
     totalTracks: p.tracks?.total ?? 0,
-    ownerIsMe
+
+    ownerIsMe,
+    ownerId,
+    ownerName,
+    ownerLabel: ownerIsMe ? "by me" : (ownerName ? `by ${ownerName}` : "by others")
   };
 }
 
-// Spotify playlist items come back as { added_at, track: {...} }.
-// For episode playlists, Spotify still uses `track` but the object type is "episode".
 function msFromItem(it) {
   const obj = it?.track;
   if (!obj) return 0;
-
-  // duration_ms exists for both tracks and episodes
   const ms = Number(obj.duration_ms);
   return Number.isFinite(ms) ? ms : 0;
 }
@@ -307,14 +307,9 @@ function clampInt(v, min, max, fallback) {
   return Math.min(max, Math.max(min, Math.floor(n)));
 }
 
-/* =========================
-   RESPONSE
-========================= */
 function json(obj, status = 200) {
   return new Response(JSON.stringify(obj, null, 2), {
     status,
-    headers: {
-      "Content-Type": "application/json; charset=utf-8"
-    }
+    headers: { "Content-Type": "application/json; charset=utf-8" }
   });
 }
