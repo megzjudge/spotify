@@ -16,7 +16,7 @@
   ];
 
   const YEAR_SUMMARY_PLAYLIST_IDS = [
-    "37i9dQZEVXcXHWVVT0lfDq"
+    "37i9dQZEVXd4WLIGflDMQQ"
   ];
 
   const PODCAST_COLUMN_LIMIT = 120;
