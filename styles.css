@@ -2,7 +2,7 @@
    Spotify Dark UI v2 (with fixed footer + scroll panels)
    + continuous background
    + styled scrollbars
-   + podcast row sizing
+   + podcast row sizing (LOCKED TO THUMB)
    ========================= */
 
 :root {
@@ -33,6 +33,10 @@
   /* Scroll sizing */
   --colMaxH: calc(100vh - 170px); /* desktop: viewport minus header+spacing */
   --mobileListMaxH: 264px;        /* ~3 items visible */
+
+  /* Podcast row sizing */
+  --podThumb: 72px;
+  --podRadius: 18px;
 }
 
 /* Reset */
@@ -482,19 +486,23 @@ main {
   padding: 0; /* controlled by grid */
 }
 
+/* ======= UPDATED: lock row size to the thumbnail ======= */
 .podcast-link-grid {
   display: grid;
-  grid-template-columns: 64px 1fr;
+  grid-template-columns: var(--podThumb) 1fr;
   gap: 12px;
   align-items: center;
   padding: 12px;
+
+  /* prevents “squashed” rows on tight layouts */
+  min-height: var(--podThumb);
 }
 
 /* Thumb is the sizing reference */
 .podcast-ep-thumb {
-  width: 64px;
-  height: 64px;
-  border-radius: 16px;
+  width: var(--podThumb);
+  height: var(--podThumb);
+  border-radius: var(--podRadius);
   object-fit: cover;
   background: #000;
 }
@@ -502,19 +510,19 @@ main {
 /* Lock row height to thumbnail (prevents clipping/cropping feeling) */
 .podcast-ep-meta {
   min-width: 0;
-  height: 64px;
+  height: var(--podThumb);
   display: flex;
   flex-direction: column;
   justify-content: center;
 }
 
+/* allow up to 2 lines but remain within thumb height */
 .podcast-item-title {
   font-weight: 750;
   font-size: 13.5px;
   color: rgba(255,255,255,0.90);
-  line-height: 1.25;
+  line-height: 1.2;
 
-  /* allow up to 2 lines but remain within 64px box */
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -682,6 +690,8 @@ footer {
     --pad: 16px;
     --colMaxH: none;
     --mobileListMaxH: 264px; /* 3-ish items */
+    --podThumb: 72px;
+    --podRadius: 18px;
   }
 
   .app-grid { grid-template-columns: 1fr; }
@@ -708,4 +718,3 @@ footer {
   .detail-head { grid-template-columns: 72px 1fr; }
   .detail-thumb { width: 72px; height: 72px; border-radius: 16px; }
 }
-
