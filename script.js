@@ -4,6 +4,7 @@
    ***********************/
   const API_REFRESH = "/api/refresh";
   const API_PLAYLIST = "/api/playlist";
+  const API_EPISODE_NOTE = "/api/episode-note";
 
   const PODCAST_PLAYLIST_ID = "2tHrihmpYzDbJ8rit7HtFR";
 
@@ -37,7 +38,14 @@
     filter: "all",
     others: [],
     yearSummary: [],
-    podcast: { tried: false, error: null, playlist: null, items: [] }
+    podcast: { tried: false, error: null, playlist: null, items: [] },
+
+    // Episode notes (GitHub-backed)
+    episodeNotes: {
+      // episodeId -> { notes:[{timestamp,text}], loaded:boolean, saving:boolean, savedAt:number|null, error:string|null }
+      cache: Object.create(null),
+      openEpisodeId: null
+    }
   };
 
   /***********************
@@ -77,6 +85,36 @@
     const el = document.getElementById("statusMessage");
     if (!el) return;
     el.textContent = msg || "";
+  }
+
+  function clampInt(v, min, max, fallback) {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.min(max, Math.max(min, Math.floor(n)));
+  }
+
+  function normalizeTimestamp(s) {
+    // Accept "SS", "MM:SS", "HH:MM:SS". Always return "HH:MM:SS".
+    const raw = String(s || "").trim();
+    if (!raw) return "00:00:00";
+
+    const parts = raw.split(":").map((x) => x.trim()).filter(Boolean);
+    if (parts.length === 1) {
+      const ss = clampInt(parts[0], 0, 59, 0);
+      return `00:00:${String(ss).padStart(2, "0")}`;
+    }
+    if (parts.length === 2) {
+      const mm = clampInt(parts[0], 0, 999, 0);
+      const ss = clampInt(parts[1], 0, 59, 0);
+      return `00:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+    }
+    if (parts.length >= 3) {
+      const hh = clampInt(parts[0], 0, 999, 0);
+      const mm = clampInt(parts[1], 0, 59, 0);
+      const ss = clampInt(parts[2], 0, 59, 0);
+      return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+    }
+    return "00:00:00";
   }
 
   function blankUntilClick() {
@@ -416,6 +454,111 @@
   }
 
   /***********************
+   * Episode Notes API (GitHub-backed via /api/episode-note)
+   ***********************/
+  function getEpisodeCacheEntry(episodeId) {
+    if (!episodeId) return null;
+    const c = state.episodeNotes.cache;
+    if (!c[episodeId]) {
+      c[episodeId] = {
+        notes: [{ timestamp: "00:00:00", text: "" }],
+        loaded: false,
+        saving: false,
+        savedAt: null,
+        error: null
+      };
+    }
+    return c[episodeId];
+  }
+
+  async function fetchEpisodeNotes(episodeId) {
+    const entry = getEpisodeCacheEntry(episodeId);
+    if (!entry) return null;
+
+    entry.error = null;
+
+    const res = await fetch(`${API_EPISODE_NOTE}?episodeId=${encodeURIComponent(episodeId)}`, {
+      method: "GET",
+      headers: { Accept: "application/json" }
+    });
+
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch {}
+
+    if (!res.ok) {
+      const msg = (data && (data.error || data.message)) || text || `HTTP ${res.status}`;
+      throw new Error(msg);
+    }
+
+    const notes = Array.isArray(data?.notes) ? data.notes : [];
+    entry.notes = notes.length ? notes.map((n) => ({
+      timestamp: normalizeTimestamp(n?.timestamp),
+      text: String(n?.text || "")
+    })) : [{ timestamp: "00:00:00", text: "" }];
+
+    entry.loaded = true;
+    entry.savedAt = null;
+    entry.error = null;
+    return entry;
+  }
+
+  async function saveEpisodeNotes(episodeId, notes) {
+    const entry = getEpisodeCacheEntry(episodeId);
+    if (!entry) return;
+
+    entry.saving = true;
+    entry.error = null;
+    entry.savedAt = null;
+    renderPodcastColumn(); // update UI (spinner/saving text)
+
+    const payload = {
+      episodeId,
+      notes: (notes || [])
+        .map((n) => ({
+          timestamp: normalizeTimestamp(n?.timestamp),
+          text: String(n?.text || "").trim()
+        }))
+        .filter((n) => n.timestamp || n.text)
+    };
+
+    // Always ensure at least one row exists in storage schema (optional)
+    if (!payload.notes.length) payload.notes = [{ timestamp: "00:00:00", text: "" }];
+
+    const res = await fetch(API_EPISODE_NOTE, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(payload)
+    });
+
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch {}
+
+    if (!res.ok) {
+      const msg = (data && (data.error || data.message)) || text || `HTTP ${res.status}`;
+      entry.saving = false;
+      entry.error = msg;
+      renderPodcastColumn();
+      throw new Error(msg);
+    }
+
+    entry.notes = payload.notes;
+    entry.loaded = true;
+    entry.saving = false;
+    entry.error = null;
+    entry.savedAt = Date.now();
+
+    renderPodcastColumn(); // reflect opacity + status
+  }
+
+  function episodeHasNotes(episodeId) {
+    const entry = state.episodeNotes.cache?.[episodeId];
+    if (!entry || !Array.isArray(entry.notes)) return false;
+    return entry.notes.some((n) => String(n?.text || "").trim().length > 0);
+  }
+
+  /***********************
    * Podcast panel
    ***********************/
   async function loadPodcastColumn() {
@@ -512,26 +655,240 @@
     sub.textContent = `${items.length} items`;
 
     list.innerHTML = items.map(renderPodcastItem).join("");
+
+    // Wire episode-note interactions (event delegation)
+    wirePodcastInteractions(list);
   }
 
   function renderPodcastItem(it) {
+    const episodeId = String(it?.id || "").trim();
     const epImg = it.image || "https://spotify.jdge.cc/images/spotify_logo.png";
     const name = escapeHtml(it.name || "Untitled");
     const channel = escapeHtml((it.artists || []).join(", "));
     const dur = fmtDurationFromMs(it.durationMs || 0);
     const url = it.url || "#";
 
+    const isOpen = state.episodeNotes.openEpisodeId && episodeId && state.episodeNotes.openEpisodeId === episodeId;
+    const hasNotes = episodeId ? episodeHasNotes(episodeId) : false;
+    const noteOpacity = hasNotes ? 1 : 0.25;
+
+    const entry = episodeId ? state.episodeNotes.cache?.[episodeId] : null;
+    const saving = !!entry?.saving;
+    const err = entry?.error || null;
+    const savedAt = entry?.savedAt || null;
+
+    const editorHtml = isOpen && episodeId
+      ? renderEpisodeNotesEditor(episodeId)
+      : "";
+
+    const statusLine = isOpen && episodeId
+      ? `
+        <div class="epnote-status" data-epnote-status="${escapeHtml(episodeId)}">
+          ${saving ? "Saving…" : (err ? `Error: ${escapeHtml(err)}` : (savedAt ? "Saved ✓" : ""))}
+        </div>
+      `
+      : "";
+
     return `
-      <li class="podcast-item">
-        <a class="podcast-link podcast-link-grid" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">
-          <img class="podcast-ep-thumb" src="${escapeHtml(epImg)}" alt="" loading="lazy">
+      <li class="podcast-item" data-episode-id="${escapeHtml(episodeId)}">
+        <div class="podcast-link podcast-link-grid">
+          <a class="podcast-ep-left" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" aria-label="Open on Spotify">
+            <img class="podcast-ep-thumb" src="${escapeHtml(epImg)}" alt="" loading="lazy">
+          </a>
+
           <div class="podcast-ep-meta">
             <div class="podcast-item-title">${name}</div>
             <div class="podcast-item-sub">${channel ? channel + " • " : ""}${escapeHtml(dur)}</div>
           </div>
-        </a>
+
+          <button
+            class="epnote-bubble"
+            type="button"
+            title="Notes"
+            aria-label="Notes"
+            data-epnote-toggle="${escapeHtml(episodeId)}"
+            style="opacity:${noteOpacity}"
+          >💭</button>
+        </div>
+
+        ${statusLine}
+        ${editorHtml}
       </li>
     `;
+  }
+
+  function renderEpisodeNotesEditor(episodeId) {
+    const entry = getEpisodeCacheEntry(episodeId);
+    const notes = Array.isArray(entry?.notes) && entry.notes.length
+      ? entry.notes
+      : [{ timestamp: "00:00:00", text: "" }];
+
+    const rowsHtml = notes.map((n, idx) => {
+      const ts = escapeHtml(normalizeTimestamp(n?.timestamp));
+      const tx = escapeHtml(String(n?.text || ""));
+      return `
+        <div class="epnote-row" data-epnote-row="${idx}">
+          <button class="epnote-add" type="button" title="Add row" aria-label="Add row" data-epnote-add="${escapeHtml(episodeId)}">👇🏻</button>
+
+          <input
+            class="epnote-time"
+            type="text"
+            inputmode="text"
+            spellcheck="false"
+            value="${ts}"
+            placeholder="00:00:00"
+            data-epnote-time="${escapeHtml(episodeId)}"
+          />
+
+          <textarea
+            class="epnote-text"
+            rows="1"
+            placeholder=""
+            data-epnote-text="${escapeHtml(episodeId)}"
+          >${tx}</textarea>
+
+          <button
+            class="epnote-save"
+            type="button"
+            title="Save"
+            aria-label="Save"
+            data-epnote-save="${escapeHtml(episodeId)}"
+          >✅</button>
+        </div>
+      `;
+    }).join("");
+
+    return `
+      <div class="epnote-editor" data-epnote-editor="${escapeHtml(episodeId)}">
+        ${rowsHtml}
+      </div>
+    `;
+  }
+
+  function wirePodcastInteractions(listEl) {
+    // avoid double-binding
+    if (listEl.__epnoteBound) return;
+    listEl.__epnoteBound = true;
+
+    listEl.addEventListener("click", async (e) => {
+      const t = e.target;
+
+      // Toggle editor
+      const toggleId = t?.getAttribute?.("data-epnote-toggle");
+      if (toggleId) {
+        e.preventDefault();
+        await toggleEpisodeEditor(toggleId);
+        return;
+      }
+
+      // Add row
+      const addId = t?.getAttribute?.("data-epnote-add");
+      if (addId) {
+        e.preventDefault();
+        addEpisodeRow(addId);
+        return;
+      }
+
+      // Save
+      const saveId = t?.getAttribute?.("data-epnote-save");
+      if (saveId) {
+        e.preventDefault();
+        await saveEpisodeFromDom(saveId);
+        return;
+      }
+    });
+
+    // Light autosize for textareas in editor (input event)
+    listEl.addEventListener("input", (e) => {
+      const ta = e.target;
+      if (ta && ta.classList && ta.classList.contains("epnote-text")) {
+        ta.style.height = "auto";
+        ta.style.height = `${Math.min(180, ta.scrollHeight)}px`;
+      }
+    });
+  }
+
+  async function toggleEpisodeEditor(episodeId) {
+    if (!episodeId) return;
+
+    if (state.episodeNotes.openEpisodeId === episodeId) {
+      state.episodeNotes.openEpisodeId = null;
+      renderPodcastColumn();
+      return;
+    }
+
+    state.episodeNotes.openEpisodeId = episodeId;
+
+    const entry = getEpisodeCacheEntry(episodeId);
+    // If not loaded yet, fetch from GitHub, but don’t block the UI.
+    renderPodcastColumn();
+
+    if (!entry.loaded) {
+      try {
+        entry.error = null;
+        renderPodcastColumn();
+        await fetchEpisodeNotes(episodeId);
+      } catch (err) {
+        entry.error = String(err?.message || err);
+      }
+      renderPodcastColumn();
+    } else {
+      // show saved status fades naturally; keep UI current
+      renderPodcastColumn();
+    }
+  }
+
+  function addEpisodeRow(episodeId) {
+    if (!episodeId) return;
+    const entry = getEpisodeCacheEntry(episodeId);
+    if (!entry) return;
+
+    if (!Array.isArray(entry.notes)) entry.notes = [];
+    entry.notes.push({ timestamp: "00:00:00", text: "" });
+
+    // Keep editor open on add
+    state.episodeNotes.openEpisodeId = episodeId;
+    renderPodcastColumn();
+  }
+
+  function collectEpisodeNotesFromDom(episodeId) {
+    const li = document.querySelector(`.podcast-item[data-episode-id="${CSS.escape(episodeId)}"]`);
+    if (!li) return [{ timestamp: "00:00:00", text: "" }];
+
+    const timeEls = Array.from(li.querySelectorAll(`input[data-epnote-time="${CSS.escape(episodeId)}"]`));
+    const textEls = Array.from(li.querySelectorAll(`textarea[data-epnote-text="${CSS.escape(episodeId)}"]`));
+
+    const rows = Math.max(timeEls.length, textEls.length);
+    const out = [];
+    for (let i = 0; i < rows; i++) {
+      const ts = normalizeTimestamp(timeEls[i]?.value || "00:00:00");
+      const tx = String(textEls[i]?.value || "").trim();
+      out.push({ timestamp: ts, text: tx });
+    }
+    return out;
+  }
+
+  async function saveEpisodeFromDom(episodeId) {
+    if (!episodeId) return;
+
+    const entry = getEpisodeCacheEntry(episodeId);
+    if (!entry) return;
+    if (entry.saving) return;
+
+    const rows = collectEpisodeNotesFromDom(episodeId);
+
+    // Optimistically store in cache so render reflects changes immediately
+    entry.notes = rows.map((r) => ({ timestamp: normalizeTimestamp(r.timestamp), text: String(r.text || "") }));
+    entry.loaded = true;
+    entry.error = null;
+    entry.savedAt = null;
+
+    try {
+      await saveEpisodeNotes(episodeId, rows);
+    } catch (err) {
+      // saveEpisodeNotes already sets entry.error + rerenders
+      console.error(err);
+    }
   }
 
   /***********************
@@ -663,6 +1020,9 @@
       state.yearSummary = Array.isArray(data?.yearSummaryPlaylists)
         ? data.yearSummaryPlaylists.map(p => ({ ...p, ownerLabel: p.ownerLabel || "Spotify" }))
         : [];
+
+      // Close any open editor on refresh (avoid mismatched DOM state)
+      state.episodeNotes.openEpisodeId = null;
 
       await Promise.all([
         loadOthersAndYearSummaryFallback(),
