@@ -1,4 +1,9 @@
 // functions/api/refresh.js
+
+export async function onRequestOptions() {
+  return new Response(null, { status: 204, headers: corsHeaders() });
+}
+
 export async function onRequestPost({ env, request }) {
   try {
     let body = {};
@@ -44,10 +49,10 @@ export async function onRequestPost({ env, request }) {
     const myUserId = me?.id || null;
     if (!myUserId) throw new Error("Could not resolve /me id from Spotify.");
 
-    // 1) Load normal library playlists
+    // 1) Load library playlists (/me/playlists)
     let playlistsRaw = await fetchMyPlaylists(accessToken, MAX_PLAYLISTS);
 
-    // 2) IMPORTANT FIX: explicitly fetch allowlisted playlists by ID
+    // 2) IMPORTANT: explicitly fetch allowlisted playlists by ID
     // because /me/playlists may not include them unless followed/saved.
     const seen = new Set((playlistsRaw || []).map(p => p?.id).filter(Boolean));
     for (const id of ALLOWLIST_IDS) {
@@ -69,10 +74,7 @@ export async function onRequestPost({ env, request }) {
     const filtered = playlistsRaw.filter((p) => {
       if (!p?.id) return false;
 
-      // explicit force exclude
-      if (FORCE_EXCLUDE_PLAYLIST_IDS.includes(p.id)) return false;
-
-      // Always include allowlisted playlists
+      // Always include allowlisted playlists (podcast / others / year-summary)
       if (ALLOWLIST_IDS.has(p.id)) return true;
 
       // Exclude anything not owned by you
@@ -149,27 +151,30 @@ export async function onRequestPost({ env, request }) {
     /***********************
      * RESPONSE
      ***********************/
-    return json({
-      lastUpdated: new Date().toISOString(),
+    return json(
+      {
+        lastUpdated: new Date().toISOString(),
 
-      totals: {
-        playlists: normal.length,
-        songs: totalSongs,
-        songMs: totalSongMs,
-        podcastEpisodes,
-        podcastMs
+        totals: {
+          playlists: normal.length,
+          songs: totalSongs,
+          songMs: totalSongMs,
+          podcastEpisodes,
+          podcastMs
+        },
+
+        sections: {
+          dailyMix,
+          top,
+          other
+        },
+
+        othersPlaylists,
+        yearSummaryPlaylists,
+        podcastPlaylist
       },
-
-      sections: {
-        dailyMix,
-        top,
-        other
-      },
-
-      othersPlaylists,
-      yearSummaryPlaylists,
-      podcastPlaylist
-    });
+      200
+    );
 
   } catch (err) {
     return json(
@@ -307,9 +312,23 @@ function clampInt(v, min, max, fallback) {
   return Math.min(max, Math.max(min, Math.floor(n)));
 }
 
+/* =========================
+   RESPONSE HELPERS
+========================= */
 function json(obj, status = 200) {
   return new Response(JSON.stringify(obj, null, 2), {
     status,
-    headers: { "Content-Type": "application/json; charset=utf-8" }
+    headers: {
+      ...corsHeaders(),
+      "Content-Type": "application/json; charset=utf-8"
+    }
   });
+}
+
+function corsHeaders() {
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type,Accept"
+  };
 }
