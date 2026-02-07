@@ -15,6 +15,8 @@
     "37i9dQZF1EQnsJ0xmvpihE"
   ];
 
+  // IMPORTANT: this only affects the fallback per-ID fetch in the browser.
+  // Your /api/refresh is the primary source of truth for Year Summary.
   const YEAR_SUMMARY_PLAYLIST_IDS = [
     "37i9dQZEVXd4WLIGflDMQQ"
   ];
@@ -145,7 +147,7 @@
         <!-- RIGHT COLUMN -->
         <aside class="panel col col-right">
           <div class="panel-header">
-            <h2 class="panel-title">Podcast Eps</h2>
+            <h2 class="panel-title">Podcast Episodes</h2>
           </div>
           <div class="panel-body col-scroll-body">
 
@@ -263,7 +265,7 @@
       </div>
 
       <div class="stat-card">
-        <div class="stat-kicker">Podcast eps</div>
+        <div class="stat-kicker">Podcast episodes</div>
         <div class="stat-big">${escapeHtml(String(podEps))}</div>
       </div>
 
@@ -353,7 +355,10 @@
     let data = null;
     try { data = text ? JSON.parse(text) : null; } catch {}
 
-    if (!res.ok || !data?.playlist) return null;
+    if (!res.ok || !data?.playlist) {
+      console.error("Playlist meta API failure:", { status: res.status, data, text });
+      return null;
+    }
 
     const p = data.playlist;
     return {
@@ -431,7 +436,13 @@
       try { data = text ? JSON.parse(text) : null; } catch {}
 
       if (!res.ok || !data) {
-        state.podcast.error = `HTTP ${res.status}`;
+        const msg =
+          (data && (data.message || data.error)) ||
+          text ||
+          `HTTP ${res.status}`;
+
+        console.error("Podcast /api/playlist error payload:", { status: res.status, data, text });
+        state.podcast.error = msg;
         return;
       }
 
@@ -567,7 +578,12 @@
       try { data = text ? JSON.parse(text) : null; } catch {}
 
       if (!res.ok) {
-        const msg = (data && (data.error || data.message)) || text || `HTTP ${res.status}`;
+        const msg =
+          (data && (data.message || data.error)) ||
+          text ||
+          `HTTP ${res.status}`;
+
+        console.error("Playlist modal /api/playlist error payload:", { status: res.status, data, text });
         throw new Error(msg);
       }
 
@@ -627,7 +643,12 @@
       try { data = text ? JSON.parse(text) : null; } catch {}
 
       if (!res.ok) {
-        const msg = (data && (data.error || data.message)) || text || `HTTP ${res.status}`;
+        const msg =
+          (data && (data.message || data.error)) ||
+          text ||
+          `HTTP ${res.status}`;
+
+        console.error("Refresh API error payload:", { status: res.status, data, text });
         throw new Error(msg);
       }
 
@@ -635,8 +656,13 @@
       state.filter = "all";
 
       // Prefer refresh payload for these panels (fast + reliable)
-      state.others = Array.isArray(data?.othersPlaylists) ? data.othersPlaylists.map(p => ({ ...p, ownerLabel: "by others" })) : [];
-      state.yearSummary = Array.isArray(data?.yearSummaryPlaylists) ? data.yearSummaryPlaylists.map(p => ({ ...p, ownerLabel: "Spotify" })) : [];
+      state.others = Array.isArray(data?.othersPlaylists)
+        ? data.othersPlaylists.map(p => ({ ...p, ownerLabel: p.ownerLabel || "by others" }))
+        : [];
+
+      state.yearSummary = Array.isArray(data?.yearSummaryPlaylists)
+        ? data.yearSummaryPlaylists.map(p => ({ ...p, ownerLabel: p.ownerLabel || "Spotify" }))
+        : [];
 
       await Promise.all([
         loadOthersAndYearSummaryFallback(),
@@ -653,7 +679,7 @@
       setStatus("");
     } catch (err) {
       console.error(err);
-      setStatus(`Refresh failed: ${String(err.message || err)}`);
+      setStatus(`Refresh failed: ${String(err?.message || err)}`);
     } finally {
       setButtonLoading(false);
     }
