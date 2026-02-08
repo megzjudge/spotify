@@ -740,6 +740,14 @@ main {
   font-size: 12px;
 }
 
+/* Force ~8 visible rows */
+#podcastList {
+  height: var(--podListH);
+  overflow: auto;
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
 /* =========================
    Modal
 ========================= */
