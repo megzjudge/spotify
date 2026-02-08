@@ -44,6 +44,17 @@
   --noteTsW: 100px; /* timestamp width */
   --noteIconOpacityEmpty: 0.22;
   --noteIconOpacityFull: 1;
+
+  /* =========================
+     NEW: Force podcast list to ~8 visible episodes on desktop
+     ========================= */
+  --podVisibleRows: 8;
+  --podRowH: calc(var(--podThumb) + 24px); /* thumb + row padding */
+  --podRowGap: 10px;                       /* matches .podcast-list gap */
+  --podListH: calc(
+    (var(--podVisibleRows) * var(--podRowH)) +
+    ((var(--podVisibleRows) - 1) * var(--podRowGap))
+  );
 }
 
 /* Reset */
@@ -481,6 +492,14 @@ main {
   min-height: 0;
 }
 
+/* =========================
+   NEW: Force podcast list to a fixed visible height (~8 items) on desktop
+========================= */
+#podcastList.podcast-scroll{
+  height: var(--podListH);
+  flex: 0 0 auto; /* don't stretch */
+}
+
 .podcast-item {
   border: 1px solid var(--stroke);
   background: rgba(0,0,0,0.18);
@@ -502,7 +521,7 @@ main {
 /* ======= lock row size to the thumbnail ======= */
 .podcast-link-grid {
   display: grid;
-  grid-template-columns: var(--podThumb) 1fr auto; /* NEW: icon column */
+  grid-template-columns: var(--podThumb) 1fr auto; /* icon column */
   gap: 12px;
   align-items: center;
   padding: 12px;
@@ -894,6 +913,12 @@ footer {
   /* On mobile: lock playlist + podcast lists to ~3 items visible */
   .cards-scroll { max-height: var(--mobileListMaxH); }
   .podcast-scroll { max-height: var(--mobileListMaxH); }
+
+  /* NEW: stop forcing 8 rows on mobile */
+  #podcastList.podcast-scroll{
+    height: auto;
+    max-height: var(--mobileListMaxH);
+  }
 
   /* Note rows: give textarea more room */
   .note-row {
