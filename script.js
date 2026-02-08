@@ -42,12 +42,10 @@
 
     // Episode notes (GitHub-backed)
     episodeNotes: {
-      // episodeId -> { notes:[{timestamp,text}], loaded:boolean, loading:boolean, saving:boolean, savedAt:number|null, error:string|null }
+      // episodeId -> { notes:[{timestamp,text}], loaded:boolean, saving:boolean, savedAt:number|null, error:string|null }
       cache: Object.create(null),
       openEpisodeId: null
-    },
-
-    _modalGlobalBound: false
+    }
   };
 
   /***********************
@@ -157,7 +155,6 @@
             </div>
           </section>
 
-          <!-- YEAR SUMMARY AS ITS OWN PANEL -->
           <section class="panel" style="margin-top:16px;">
             <div class="panel-header">
               <h2 class="panel-title">Year Summary Playlist</h2>
@@ -199,9 +196,7 @@
               </div>
             </div>
 
-            <!-- keep node (for layout), but no instructional text -->
             <div class="podcast-empty" id="podcastEmpty"></div>
-
             <div class="podcast-error" id="podcastError" hidden></div>
 
             <ul class="podcast-list podcast-scroll" id="podcastList"></ul>
@@ -234,20 +229,14 @@
     const backdrop = document.getElementById("modalBackdrop");
     const closeBtn = document.getElementById("modalCloseBtn");
     if (closeBtn) closeBtn.addEventListener("click", closeModal);
-
     if (backdrop) {
       backdrop.addEventListener("click", (e) => {
         if (e.target === backdrop) closeModal();
       });
     }
-
-    // bind Escape only once
-    if (!state._modalGlobalBound) {
-      state._modalGlobalBound = true;
-      document.addEventListener("keydown", (e) => {
-        if (e.key === "Escape") closeModal();
-      });
-    }
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") closeModal();
+    });
   }
 
   /***********************
@@ -269,7 +258,6 @@
   }
 
   function wireCardClicks(containerEl) {
-    if (!containerEl) return;
     containerEl.querySelectorAll(".card[data-playlist-id]").forEach((el) => {
       el.addEventListener("click", async () => {
         const id = el.getAttribute("data-playlist-id");
@@ -389,7 +377,6 @@
 
   /***********************
    * Manual panels (Others + Year Summary)
-   * Prefer refresh payload, fallback to per-ID fetch
    ***********************/
   async function fetchPlaylistMeta(playlistId, ownerLabelFallback) {
     const res = await fetch(API_PLAYLIST, {
@@ -419,7 +406,6 @@
   }
 
   async function loadOthersAndYearSummaryFallback() {
-    // Others
     if (!state.others.length) {
       const others = [];
       for (const id of OTHERS_PLAYLIST_IDS) {
@@ -429,7 +415,6 @@
       state.others = others;
     }
 
-    // Year Summary
     if (!state.yearSummary.length) {
       const years = [];
       for (const id of YEAR_SUMMARY_PLAYLIST_IDS) {
@@ -463,7 +448,7 @@
   }
 
   /***********************
-   * Episode Notes API (GitHub-backed via /api/episode-note)
+   * Episode Notes
    ***********************/
   function getEpisodeCacheEntry(episodeId) {
     if (!episodeId) return null;
@@ -472,7 +457,6 @@
       c[episodeId] = {
         notes: [{ timestamp: "00:00:00", text: "" }],
         loaded: false,
-        loading: false,
         saving: false,
         savedAt: null,
         error: null
@@ -486,7 +470,6 @@
     if (!entry) return null;
 
     entry.error = null;
-    entry.loading = true;
 
     const res = await fetch(`${API_EPISODE_NOTE}?episodeId=${encodeURIComponent(episodeId)}`, {
       method: "GET",
@@ -498,7 +481,6 @@
     try { data = text ? JSON.parse(text) : null; } catch {}
 
     if (!res.ok) {
-      entry.loading = false;
       const msg = (data && (data.error || data.message)) || text || `HTTP ${res.status}`;
       throw new Error(msg);
     }
@@ -510,7 +492,6 @@
     })) : [{ timestamp: "00:00:00", text: "" }];
 
     entry.loaded = true;
-    entry.loading = false;
     entry.savedAt = null;
     entry.error = null;
     return entry;
@@ -557,7 +538,6 @@
 
     entry.notes = payload.notes;
     entry.loaded = true;
-    entry.loading = false;
     entry.saving = false;
     entry.error = null;
     entry.savedAt = Date.now();
@@ -592,11 +572,7 @@
       try { data = text ? JSON.parse(text) : null; } catch {}
 
       if (!res.ok || !data) {
-        const msg =
-          (data && (data.message || data.error)) ||
-          text ||
-          `HTTP ${res.status}`;
-
+        const msg = (data && (data.message || data.error)) || text || `HTTP ${res.status}`;
         console.error("Podcast /api/playlist error payload:", { status: res.status, data, text });
         state.podcast.error = msg;
         return;
@@ -606,11 +582,10 @@
 
       const items = Array.isArray(data.items) ? data.items : [];
 
-      // Most recently added first:
-      // Prefer addedAt if present; otherwise reverse playlist order as fallback.
-      const withAddedAt = items.filter(x => x?.addedAt && !Number.isNaN(Date.parse(x.addedAt))).length;
-
-      if (withAddedAt >= 3) {
+      // ✅ newest-first:
+      // Prefer addedAt if present; otherwise reverse so newest appears at top.
+      const anyAddedAt = items.some((x) => !!x?.addedAt);
+      if (anyAddedAt) {
         items.sort((a, b) => {
           const ta = a?.addedAt ? Date.parse(a.addedAt) : 0;
           const tb = b?.addedAt ? Date.parse(b.addedAt) : 0;
@@ -675,7 +650,6 @@
     sub.textContent = `${items.length} items`;
 
     list.innerHTML = items.map(renderPodcastItem).join("");
-
     wirePodcastInteractions(list);
   }
 
@@ -688,13 +662,11 @@
     const url = it.url || "#";
 
     const isOpen = state.episodeNotes.openEpisodeId && episodeId && state.episodeNotes.openEpisodeId === episodeId;
-
-    const entry = episodeId ? state.episodeNotes.cache?.[episodeId] : null;
     const hasNotes = episodeId ? episodeHasNotes(episodeId) : false;
     const noteOpacity = hasNotes ? 1 : 0.25;
 
+    const entry = episodeId ? state.episodeNotes.cache?.[episodeId] : null;
     const saving = !!entry?.saving;
-    const loading = !!entry?.loading;
     const err = entry?.error || null;
     const savedAt = entry?.savedAt || null;
 
@@ -703,12 +675,10 @@
     const statusLine = isOpen && episodeId
       ? `
         <div class="epnote-status" data-epnote-status="${escapeHtml(episodeId)}">
-          ${loading ? "Loading…" : (saving ? "Saving…" : (err ? `Error: ${escapeHtml(err)}` : (savedAt ? "Saved ✓" : "")))}
+          ${saving ? "Saving…" : (err ? `Error: ${escapeHtml(err)}` : (savedAt ? "Saved ✓" : ""))}
         </div>
       `
       : "";
-
-    const bubbleDisabled = episodeId ? "" : "disabled";
 
     return `
       <li class="podcast-item" data-episode-id="${escapeHtml(episodeId)}">
@@ -729,7 +699,6 @@
             aria-label="Notes"
             data-epnote-toggle="${escapeHtml(episodeId)}"
             style="opacity:${noteOpacity}"
-            ${bubbleDisabled}
           >💭</button>
         </div>
 
@@ -788,8 +757,6 @@
   }
 
   function wirePodcastInteractions(listEl) {
-    if (!listEl) return;
-
     if (listEl.__epnoteBound) return;
     listEl.__epnoteBound = true;
 
@@ -799,7 +766,6 @@
       const toggleId = t?.getAttribute?.("data-epnote-toggle");
       if (toggleId) {
         e.preventDefault();
-        if (!toggleId) return;
         await toggleEpisodeEditor(toggleId);
         return;
       }
@@ -842,14 +808,12 @@
     const entry = getEpisodeCacheEntry(episodeId);
     renderPodcastColumn();
 
-    if (!entry.loaded && !entry.loading) {
+    if (!entry.loaded) {
       try {
         entry.error = null;
-        entry.loading = true;
         renderPodcastColumn();
         await fetchEpisodeNotes(episodeId);
       } catch (err) {
-        entry.loading = false;
         entry.error = String(err?.message || err);
       }
       renderPodcastColumn();
@@ -898,7 +862,6 @@
 
     entry.notes = rows.map((r) => ({ timestamp: normalizeTimestamp(r.timestamp), text: String(r.text || "") }));
     entry.loaded = true;
-    entry.loading = false;
     entry.error = null;
     entry.savedAt = null;
 
@@ -953,11 +916,7 @@
       try { data = text ? JSON.parse(text) : null; } catch {}
 
       if (!res.ok) {
-        const msg =
-          (data && (data.message || data.error)) ||
-          text ||
-          `HTTP ${res.status}`;
-
+        const msg = (data && (data.message || data.error)) || text || `HTTP ${res.status}`;
         console.error("Playlist modal /api/playlist error payload:", { status: res.status, data, text });
         throw new Error(msg);
       }
@@ -1018,11 +977,7 @@
       try { data = text ? JSON.parse(text) : null; } catch {}
 
       if (!res.ok) {
-        const msg =
-          (data && (data.message || data.error)) ||
-          text ||
-          `HTTP ${res.status}`;
-
+        const msg = (data && (data.message || data.error)) || text || `HTTP ${res.status}`;
         console.error("Refresh API error payload:", { status: res.status, data, text });
         throw new Error(msg);
       }
