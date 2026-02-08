@@ -42,10 +42,12 @@
 
     // Episode notes (GitHub-backed)
     episodeNotes: {
-      // episodeId -> { notes:[{timestamp,text}], loaded:boolean, saving:boolean, savedAt:number|null, error:string|null }
+      // episodeId -> { notes:[{timestamp,text}], loaded:boolean, loading:boolean, saving:boolean, savedAt:number|null, error:string|null }
       cache: Object.create(null),
       openEpisodeId: null
-    }
+    },
+
+    _modalGlobalBound: false
   };
 
   /***********************
@@ -232,14 +234,20 @@
     const backdrop = document.getElementById("modalBackdrop");
     const closeBtn = document.getElementById("modalCloseBtn");
     if (closeBtn) closeBtn.addEventListener("click", closeModal);
+
     if (backdrop) {
       backdrop.addEventListener("click", (e) => {
         if (e.target === backdrop) closeModal();
       });
     }
-    document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") closeModal();
-    });
+
+    // bind Escape only once
+    if (!state._modalGlobalBound) {
+      state._modalGlobalBound = true;
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") closeModal();
+      });
+    }
   }
 
   /***********************
@@ -261,6 +269,7 @@
   }
 
   function wireCardClicks(containerEl) {
+    if (!containerEl) return;
     containerEl.querySelectorAll(".card[data-playlist-id]").forEach((el) => {
       el.addEventListener("click", async () => {
         const id = el.getAttribute("data-playlist-id");
@@ -463,6 +472,7 @@
       c[episodeId] = {
         notes: [{ timestamp: "00:00:00", text: "" }],
         loaded: false,
+        loading: false,
         saving: false,
         savedAt: null,
         error: null
@@ -476,6 +486,7 @@
     if (!entry) return null;
 
     entry.error = null;
+    entry.loading = true;
 
     const res = await fetch(`${API_EPISODE_NOTE}?episodeId=${encodeURIComponent(episodeId)}`, {
       method: "GET",
@@ -487,6 +498,7 @@
     try { data = text ? JSON.parse(text) : null; } catch {}
 
     if (!res.ok) {
+      entry.loading = false;
       const msg = (data && (data.error || data.message)) || text || `HTTP ${res.status}`;
       throw new Error(msg);
     }
@@ -498,6 +510,7 @@
     })) : [{ timestamp: "00:00:00", text: "" }];
 
     entry.loaded = true;
+    entry.loading = false;
     entry.savedAt = null;
     entry.error = null;
     return entry;
@@ -510,7 +523,7 @@
     entry.saving = true;
     entry.error = null;
     entry.savedAt = null;
-    renderPodcastColumn(); // update UI (spinner/saving text)
+    renderPodcastColumn();
 
     const payload = {
       episodeId,
@@ -522,7 +535,6 @@
         .filter((n) => n.timestamp || n.text)
     };
 
-    // Always ensure at least one row exists in storage schema (optional)
     if (!payload.notes.length) payload.notes = [{ timestamp: "00:00:00", text: "" }];
 
     const res = await fetch(API_EPISODE_NOTE, {
@@ -545,11 +557,12 @@
 
     entry.notes = payload.notes;
     entry.loaded = true;
+    entry.loading = false;
     entry.saving = false;
     entry.error = null;
     entry.savedAt = Date.now();
 
-    renderPodcastColumn(); // reflect opacity + status
+    renderPodcastColumn();
   }
 
   function episodeHasNotes(episodeId) {
@@ -593,12 +606,19 @@
 
       const items = Array.isArray(data.items) ? data.items : [];
 
-      // newest added first
-      items.sort((a, b) => {
-        const ta = a?.addedAt ? Date.parse(a.addedAt) : 0;
-        const tb = b?.addedAt ? Date.parse(b.addedAt) : 0;
-        return tb - ta;
-      });
+      // Most recently added first:
+      // Prefer addedAt if present; otherwise reverse playlist order as fallback.
+      const withAddedAt = items.filter(x => x?.addedAt && !Number.isNaN(Date.parse(x.addedAt))).length;
+
+      if (withAddedAt >= 3) {
+        items.sort((a, b) => {
+          const ta = a?.addedAt ? Date.parse(a.addedAt) : 0;
+          const tb = b?.addedAt ? Date.parse(b.addedAt) : 0;
+          return tb - ta;
+        });
+      } else {
+        items.reverse();
+      }
 
       state.podcast.items = items;
     } catch (e) {
@@ -656,7 +676,6 @@
 
     list.innerHTML = items.map(renderPodcastItem).join("");
 
-    // Wire episode-note interactions (event delegation)
     wirePodcastInteractions(list);
   }
 
@@ -669,25 +688,27 @@
     const url = it.url || "#";
 
     const isOpen = state.episodeNotes.openEpisodeId && episodeId && state.episodeNotes.openEpisodeId === episodeId;
+
+    const entry = episodeId ? state.episodeNotes.cache?.[episodeId] : null;
     const hasNotes = episodeId ? episodeHasNotes(episodeId) : false;
     const noteOpacity = hasNotes ? 1 : 0.25;
 
-    const entry = episodeId ? state.episodeNotes.cache?.[episodeId] : null;
     const saving = !!entry?.saving;
+    const loading = !!entry?.loading;
     const err = entry?.error || null;
     const savedAt = entry?.savedAt || null;
 
-    const editorHtml = isOpen && episodeId
-      ? renderEpisodeNotesEditor(episodeId)
-      : "";
+    const editorHtml = isOpen && episodeId ? renderEpisodeNotesEditor(episodeId) : "";
 
     const statusLine = isOpen && episodeId
       ? `
         <div class="epnote-status" data-epnote-status="${escapeHtml(episodeId)}">
-          ${saving ? "Saving…" : (err ? `Error: ${escapeHtml(err)}` : (savedAt ? "Saved ✓" : ""))}
+          ${loading ? "Loading…" : (saving ? "Saving…" : (err ? `Error: ${escapeHtml(err)}` : (savedAt ? "Saved ✓" : "")))}
         </div>
       `
       : "";
+
+    const bubbleDisabled = episodeId ? "" : "disabled";
 
     return `
       <li class="podcast-item" data-episode-id="${escapeHtml(episodeId)}">
@@ -708,6 +729,7 @@
             aria-label="Notes"
             data-epnote-toggle="${escapeHtml(episodeId)}"
             style="opacity:${noteOpacity}"
+            ${bubbleDisabled}
           >💭</button>
         </div>
 
@@ -766,22 +788,22 @@
   }
 
   function wirePodcastInteractions(listEl) {
-    // avoid double-binding
+    if (!listEl) return;
+
     if (listEl.__epnoteBound) return;
     listEl.__epnoteBound = true;
 
     listEl.addEventListener("click", async (e) => {
       const t = e.target;
 
-      // Toggle editor
       const toggleId = t?.getAttribute?.("data-epnote-toggle");
       if (toggleId) {
         e.preventDefault();
+        if (!toggleId) return;
         await toggleEpisodeEditor(toggleId);
         return;
       }
 
-      // Add row
       const addId = t?.getAttribute?.("data-epnote-add");
       if (addId) {
         e.preventDefault();
@@ -789,7 +811,6 @@
         return;
       }
 
-      // Save
       const saveId = t?.getAttribute?.("data-epnote-save");
       if (saveId) {
         e.preventDefault();
@@ -798,7 +819,6 @@
       }
     });
 
-    // Light autosize for textareas in editor (input event)
     listEl.addEventListener("input", (e) => {
       const ta = e.target;
       if (ta && ta.classList && ta.classList.contains("epnote-text")) {
@@ -820,20 +840,20 @@
     state.episodeNotes.openEpisodeId = episodeId;
 
     const entry = getEpisodeCacheEntry(episodeId);
-    // If not loaded yet, fetch from GitHub, but don’t block the UI.
     renderPodcastColumn();
 
-    if (!entry.loaded) {
+    if (!entry.loaded && !entry.loading) {
       try {
         entry.error = null;
+        entry.loading = true;
         renderPodcastColumn();
         await fetchEpisodeNotes(episodeId);
       } catch (err) {
+        entry.loading = false;
         entry.error = String(err?.message || err);
       }
       renderPodcastColumn();
     } else {
-      // show saved status fades naturally; keep UI current
       renderPodcastColumn();
     }
   }
@@ -846,7 +866,6 @@
     if (!Array.isArray(entry.notes)) entry.notes = [];
     entry.notes.push({ timestamp: "00:00:00", text: "" });
 
-    // Keep editor open on add
     state.episodeNotes.openEpisodeId = episodeId;
     renderPodcastColumn();
   }
@@ -877,16 +896,15 @@
 
     const rows = collectEpisodeNotesFromDom(episodeId);
 
-    // Optimistically store in cache so render reflects changes immediately
     entry.notes = rows.map((r) => ({ timestamp: normalizeTimestamp(r.timestamp), text: String(r.text || "") }));
     entry.loaded = true;
+    entry.loading = false;
     entry.error = null;
     entry.savedAt = null;
 
     try {
       await saveEpisodeNotes(episodeId, rows);
     } catch (err) {
-      // saveEpisodeNotes already sets entry.error + rerenders
       console.error(err);
     }
   }
@@ -1012,7 +1030,6 @@
       state.snapshot = data;
       state.filter = "all";
 
-      // Prefer refresh payload for these panels (fast + reliable)
       state.others = Array.isArray(data?.othersPlaylists)
         ? data.othersPlaylists.map(p => ({ ...p, ownerLabel: p.ownerLabel || "by others" }))
         : [];
@@ -1021,7 +1038,6 @@
         ? data.yearSummaryPlaylists.map(p => ({ ...p, ownerLabel: p.ownerLabel || "Spotify" }))
         : [];
 
-      // Close any open editor on refresh (avoid mismatched DOM state)
       state.episodeNotes.openEpisodeId = null;
 
       await Promise.all([
