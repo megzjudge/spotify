@@ -1,1071 +1,917 @@
-(() => {
-  /***********************
-   * CONFIG
-   ***********************/
-  const API_REFRESH = "/api/refresh";
-  const API_PLAYLIST = "/api/playlist";
-  const API_EPISODE_NOTE = "/api/episode-note";
+/* =========================
+   Spotify Dark UI v2 (with fixed footer + scroll panels)
+   + continuous background
+   + styled scrollbars
+   + podcast row sizing (LOCKED TO THUMB)
+   + episode notes UI (💭 + inline editor)
+   ========================= */
 
-  const PODCAST_PLAYLIST_ID = "2tHrihmpYzDbJ8rit7HtFR";
+:root {
+  --spotify-green: #1db954;
 
-  const OTHERS_PLAYLIST_IDS = [
-    "71z6BdHlnfNj4DKRhuu1Fk",
-    "7jYNznHoIYgJBzwT5jpoOe",
-    "41PZG18MrSTagagiIaiG4X",
-    "37i9dQZF1DX5mB2C8gBeUM",
-    "37i9dQZF1EQnsJ0xmvpihE"
-  ];
+  --bg0: #070a0c;
+  --bg1: #0b1013;
+  --panel: rgba(18, 26, 30, 0.62);
+  --panel-2: rgba(18, 26, 30, 0.46);
+  --stroke: rgba(255,255,255,0.08);
+  --stroke-2: rgba(255,255,255,0.12);
 
-  // IMPORTANT: this only affects the fallback per-ID fetch in the browser.
-  // Your /api/refresh is the primary source of truth for Year Summary.
-  const YEAR_SUMMARY_PLAYLIST_IDS = [
-    "37i9dQZEVXd4WLIGflDMQQ"
-  ];
+  --text: rgba(255,255,255,0.92);
+  --muted: rgba(255,255,255,0.62);
+  --muted2: rgba(255,255,255,0.46);
 
-  const PODCAST_COLUMN_LIMIT = 120;
+  --shadow: 0 18px 50px rgba(0,0,0,0.55);
+  --shadow2: 0 8px 26px rgba(0,0,0,0.45);
 
-  /***********************
-   * DOM
-   ***********************/
-  const refreshButton = document.getElementById("refreshButton");
-  const appMain = document.getElementById("appMain");
+  --radius-lg: 22px;
+  --radius-md: 16px;
+  --radius-sm: 12px;
+  --pill: 999px;
 
-  /***********************
-   * STATE
-   ***********************/
-  const state = {
-    snapshot: null,
-    filter: "all",
-    others: [],
-    yearSummary: [],
-    podcast: { tried: false, error: null, playlist: null, items: [] },
+  --max: 1200px;
+  --pad: 22px;
 
-    // Episode notes (GitHub-backed)
-    episodeNotes: {
-      // episodeId -> { notes:[{timestamp,text}], loaded:boolean, loading:boolean, saving:boolean, savedAt:number|null, error:string|null }
-      cache: Object.create(null),
-      openEpisodeId: null
-    },
+  /* Scroll sizing */
+  --colMaxH: calc(100vh - 170px); /* desktop: viewport minus header+spacing */
+  --mobileListMaxH: 264px;        /* ~3 items visible */
 
-    _modalGlobalBound: false
-  };
+  /* Podcast row sizing */
+  --podThumb: 72px;
+  --podRadius: 18px;
 
-  /***********************
-   * UI Helpers
-   ***********************/
-  function setButtonLoading(isLoading) {
-    if (!refreshButton) return;
-    refreshButton.disabled = isLoading;
-    refreshButton.classList.toggle("is-loading", isLoading);
+  /* Notes UI */
+  --noteRowMinH: 38px;
+  --noteTsW: 100px; /* timestamp width */
+  --noteIconOpacityEmpty: 0.22;
+  --noteIconOpacityFull: 1;
+}
+
+/* Reset */
+*,
+*::before,
+*::after { box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+html { background: #050708; }
+
+/* Continuous background layer (prevents “cutting” on mobile) */
+body::before{
+  content:"";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(900px 520px at 18% 0%, rgba(29,185,84,0.18), transparent 60%),
+    radial-gradient(900px 520px at 82% 0%, rgba(29,185,84,0.10), transparent 62%),
+    radial-gradient(1100px 680px at 50% 110%, rgba(29,185,84,0.08), transparent 55%),
+    linear-gradient(180deg, var(--bg0), var(--bg1) 70%, #050708);
+}
+
+body {
+  margin: 0;
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+  background: transparent;
+  -webkit-font-smoothing: antialiased;
+
+  /* Sticky footer layout */
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+a { color: inherit; text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+img { display: block; max-width: 100%; }
+
+/* =========================
+   Header
+========================= */
+
+header {
+  border-bottom: 1px solid var(--stroke);
+  background: linear-gradient(135deg, rgba(29,185,84,0.16), transparent 55%);
+}
+
+.container-header,
+.container-footer {
+  max-width: var(--max);
+  margin: 0 auto;
+  padding: 18px var(--pad);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+header h1 {
+  margin: 0;
+  font-size: 22px;
+  letter-spacing: 0.2px;
+}
+
+.tagline { display: none; }
+
+/* Button */
+.primary-button {
+  border: 1px solid rgba(29,185,84,0.30);
+  background: linear-gradient(180deg, rgba(29,185,84,0.95), rgba(17,158,69,0.95));
+  color: #061109;
+  font-weight: 700;
+  border-radius: var(--pill);
+  padding: 10px 16px;
+  min-width: 190px;
+  cursor: pointer;
+  box-shadow: 0 12px 28px rgba(0,0,0,0.45);
+  transition: transform 0.08s ease-out, filter 0.12s ease-out, box-shadow 0.12s ease-out;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.primary-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  filter: brightness(1.03);
+  box-shadow: 0 16px 38px rgba(0,0,0,0.55);
+}
+
+.primary-button:disabled {
+  opacity: 0.55;
+  cursor: default;
+  box-shadow: none;
+}
+
+.primary-button .button-label-loading { display: none; }
+.primary-button.is-loading .button-label-default { display: none; }
+.primary-button.is-loading .button-label-loading { display: inline; }
+
+/* =========================
+   Main (fills available height so footer stays at bottom)
+========================= */
+
+main {
+  max-width: var(--max);
+  margin: 0 auto;
+  padding: 18px var(--pad) 28px;
+  width: 100%;
+  flex: 1; /* key for sticky footer */
+}
+
+/* status line */
+.status {
+  margin: 8px 0 16px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+/* =========================
+   Grid layout
+========================= */
+
+.app-grid {
+  display: grid;
+  grid-template-columns: 340px 1fr 340px;
+  gap: 18px;
+  align-items: start;
+}
+
+.col { min-width: 0; }
+
+/* Panels */
+.panel {
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--stroke);
+  background: var(--panel);
+  box-shadow: var(--shadow2);
+  overflow: hidden;
+  backdrop-filter: blur(10px);
+}
+
+.panel-header {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--stroke);
+  background: linear-gradient(180deg, rgba(255,255,255,0.03), transparent);
+}
+
+.panel-title {
+  margin: 0;
+  font-size: 13px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Make bodies flex-safe for nested scrolling */
+.panel-body {
+  padding: 14px 14px 16px;
+  min-height: 0;
+}
+
+.col-scroll-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+
+  /* Desktop “lock to viewport” feel */
+  max-height: var(--colMaxH);
+  min-height: 0;
+}
+
+/* =========================
+   Subpanels
+========================= */
+
+.subpanel {
+  border: 1px solid var(--stroke);
+  border-radius: var(--radius-md);
+  background: var(--panel-2);
+  overflow: hidden;
+  min-height: 0;
+}
+
+.subpanel-header {
+  padding: 12px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--stroke);
+}
+
+/* Let the playlists block expand + scroll internally */
+.subpanel-flex {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+.subpanel-count {
+  color: var(--muted2);
+  font-size: 13px;
+}
+
+/* =========================
+   Statistics cards
+========================= */
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.stat-card {
+  border-radius: var(--radius-md);
+  border: 1px solid var(--stroke);
+  background: rgba(0,0,0,0.18);
+  padding: 12px 12px 11px;
+  box-shadow: 0 10px 26px rgba(0,0,0,0.30);
+}
+
+.stat-card.span-2 { grid-column: span 2; }
+
+.stat-kicker {
+  color: var(--muted2);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  margin-bottom: 6px;
+  white-space: nowrap; /* keep single line */
+}
+
+.stat-big {
+  font-size: 26px;
+  font-weight: 800;
+  line-height: 1.05;
+}
+
+/* =========================
+   Filter pills
+========================= */
+
+.filter-pills {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.pill {
+  border: 1px solid var(--stroke);
+  background: rgba(0,0,0,0.18);
+  color: var(--text);
+  border-radius: var(--pill);
+  padding: 11px 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  transition: border-color 0.12s ease-out, transform 0.08s ease-out;
+}
+
+.pill:hover {
+  border-color: rgba(255,255,255,0.14);
+  transform: translateY(-1px);
+}
+
+.pill.active {
+  border-color: rgba(29,185,84,0.55);
+  box-shadow: 0 0 0 2px rgba(29,185,84,0.14);
+}
+
+.pill-label { font-weight: 700; }
+.pill-count { color: var(--muted2); font-weight: 700; }
+
+/* =========================
+   Cards (playlist cards)
+========================= */
+
+.cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  min-height: 0;
+}
+
+.cards-compact { padding: 0; }
+
+/* Scrollable cards areas (Playlists + Podcast) */
+.cards-scroll,
+.podcast-scroll {
+  overflow: auto;
+  min-height: 0;
+  flex: 1;
+
+  /* Firefox */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.18) rgba(0,0,0,0.18);
+}
+
+/* WebKit scrollbars */
+.cards-scroll::-webkit-scrollbar,
+.podcast-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+
+.cards-scroll::-webkit-scrollbar-track,
+.podcast-scroll::-webkit-scrollbar-track {
+  background: rgba(0,0,0,0.18);
+  border-left: 1px solid rgba(255,255,255,0.05);
+}
+
+.cards-scroll::-webkit-scrollbar-thumb,
+.podcast-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.14);
+  border: 2px solid rgba(0,0,0,0.18);
+  border-radius: 999px;
+}
+
+.cards-scroll::-webkit-scrollbar-thumb:hover,
+.podcast-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,255,255,0.22);
+}
+
+.card {
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid var(--stroke);
+  background: rgba(0,0,0,0.18);
+  border-radius: var(--radius-md);
+  padding: 10px;
+  cursor: pointer;
+  transition: transform 0.08s ease-out, border-color 0.12s ease-out;
+}
+
+.card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255,255,255,0.14);
+}
+
+.thumb {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  object-fit: cover;
+  background: #000;
+}
+
+.card-meta { min-width: 0; }
+.card-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 750;
+  color: rgba(255,255,255,.90);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.card-sub {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  color: var(--muted2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.muted-small { color: var(--muted2); font-size: 13px; padding: 6px 2px; }
+
+/* =========================
+   Podcast column (episode thumbs + scroll)
+========================= */
+
+.podcast-head {
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  gap: 12px;
+  align-items: center;
+}
+
+.podcast-thumb {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  object-fit: cover;
+  background: #000;
+}
+
+.podcast-title {
+  font-weight: 800;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.podcast-sub {
+  margin-top: 4px;
+  color: var(--muted2);
+  font-size: 12.5px;
+}
+
+/* keep element available, but you’re no longer showing instructional text */
+.podcast-empty {
+  display: none;
+}
+
+.podcast-error {
+  color: rgba(255,255,255,0.86);
+  background: rgba(255, 70, 70, 0.10);
+  border: 1px solid rgba(255, 70, 70, 0.22);
+  border-radius: var(--radius-md);
+  padding: 10px;
+  font-size: 13px;
+}
+
+.podcast-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+
+  min-height: 0;
+}
+
+.podcast-item {
+  border: 1px solid var(--stroke);
+  background: rgba(0,0,0,0.18);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+/* Keep link clickable, but allow controls */
+.podcast-link {
+  display: block;
+  padding: 0; /* controlled by grid */
+}
+
+/* Row wrapper so we can place 💭 on the right without breaking thumb sizing */
+.podcast-row {
+  position: relative;
+}
+
+/* ======= lock row size to the thumbnail ======= */
+.podcast-link-grid {
+  display: grid;
+  grid-template-columns: var(--podThumb) 1fr auto; /* NEW: icon column */
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+
+  min-height: var(--podThumb);
+}
+
+/* Thumb is the sizing reference */
+.podcast-ep-thumb {
+  width: var(--podThumb);
+  height: var(--podThumb);
+  border-radius: var(--podRadius);
+  object-fit: cover;
+  background: #000;
+}
+
+/* Lock meta height to thumbnail */
+.podcast-ep-meta {
+  min-width: 0;
+  height: var(--podThumb);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+/* allow up to 2 lines but remain within thumb height */
+.podcast-item-title {
+  font-weight: 750;
+  font-size: 13.5px;
+  color: rgba(255,255,255,0.90);
+  line-height: 1.2;
+
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.podcast-item-sub {
+  margin-top: 6px;
+  color: var(--muted2);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* =========================
+   Notes UI (💭 + editor)
+========================= */
+
+/* Icon button */
+.note-btn {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: rgba(255,255,255,0.90);
+  border-radius: 999px;
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+
+  /* default: "empty" look */
+  opacity: var(--noteIconOpacityEmpty);
+  transition: opacity 0.12s ease-out, transform 0.08s ease-out, border-color 0.12s ease-out, background 0.12s ease-out;
+}
+
+.note-btn:hover {
+  opacity: 0.95;
+  border-color: rgba(255,255,255,0.14);
+  background: rgba(0,0,0,0.18);
+  transform: translateY(-1px);
+}
+
+/* when notes exist */
+.note-btn.has-notes {
+  opacity: var(--noteIconOpacityFull);
+}
+
+/* expanded editor container */
+.note-editor {
+  border-top: 1px solid rgba(255,255,255,0.06);
+  padding: 10px 12px 12px;
+  background: rgba(0,0,0,0.14);
+}
+
+/* header row inside editor */
+.note-editor-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.note-editor-title {
+  color: rgba(255,255,255,0.84);
+  font-size: 12px;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+}
+
+.note-saved {
+  color: rgba(255,255,255,0.70);
+  font-size: 12px;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.14s ease-out;
+}
+
+.note-saved.is-visible { opacity: 1; }
+
+/* rows */
+.note-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* each note row */
+.note-row {
+  display: grid;
+  grid-template-columns: 28px var(--noteTsW) 1fr 34px; /* 👇, timestamp, textarea, ✅ */
+  gap: 10px;
+  align-items: start;
+}
+
+.note-add {
+  appearance: none;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(0,0,0,0.18);
+  color: rgba(255,255,255,0.88);
+  border-radius: 12px;
+  width: 28px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.08s ease-out, border-color 0.12s ease-out, background 0.12s ease-out;
+}
+
+.note-add:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255,255,255,0.14);
+  background: rgba(0,0,0,0.22);
+}
+
+/* timestamp */
+.note-ts {
+  width: 100%;
+  height: 34px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(0,0,0,0.18);
+  color: rgba(255,255,255,0.92);
+  padding: 6px 10px;
+  font-size: 13px;
+  outline: none;
+}
+
+.note-ts:focus {
+  border-color: rgba(29,185,84,0.45);
+  box-shadow: 0 0 0 2px rgba(29,185,84,0.14);
+}
+
+/* textarea */
+.note-text {
+  width: 100%;
+  min-height: var(--noteRowMinH);
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(0,0,0,0.18);
+  color: rgba(255,255,255,0.92);
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 1.35;
+  resize: vertical;
+  outline: none;
+}
+
+.note-text:focus {
+  border-color: rgba(29,185,84,0.45);
+  box-shadow: 0 0 0 2px rgba(29,185,84,0.14);
+}
+
+/* save button (emoji tick) */
+.note-save {
+  appearance: none;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(0,0,0,0.18);
+  color: rgba(255,255,255,0.92);
+  border-radius: 12px;
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.08s ease-out, border-color 0.12s ease-out, background 0.12s ease-out;
+}
+
+.note-save:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255,255,255,0.14);
+  background: rgba(0,0,0,0.22);
+}
+
+/* small helper line under editor (optional) */
+.note-help {
+  margin-top: 10px;
+  color: rgba(255,255,255,0.52);
+  font-size: 12px;
+}
+
+/* =========================
+   Modal
+========================= */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.62);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  z-index: 50;
+}
+
+.modal-backdrop.open { display: flex; }
+
+.modal {
+  width: min(860px, 100%);
+  max-height: min(86vh, 900px);
+  overflow: auto;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--stroke);
+  background: rgba(14, 20, 24, 0.92);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(10px);
+}
+
+.modal-top {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--stroke);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.modal-title {
+  margin: 0;
+  font-size: 14px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.modal-close {
+  border: 1px solid var(--stroke);
+  background: rgba(0,0,0,0.18);
+  color: var(--text);
+  border-radius: var(--pill);
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.modal-close:hover { border-color: rgba(255,255,255,0.14); }
+
+.detail-head {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  gap: 14px;
+  padding: 16px;
+  border-bottom: 1px solid var(--stroke);
+}
+
+.detail-thumb {
+  width: 92px;
+  height: 92px;
+  border-radius: 18px;
+  object-fit: cover;
+  background: #000;
+}
+
+.detail-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 850;
+  line-height: 1.15;
+}
+
+.detail-sub {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13.5px;
+}
+
+/* track list */
+.tracklist {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.track {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+.track-name {
+  font-weight: 700;
+  font-size: 14px;
+  color: rgba(255,255,255,0.90);
+  text-decoration: none;
+}
+
+.track-name:hover { text-decoration: underline; }
+
+.track-meta {
+  margin-top: 4px;
+  color: var(--muted2);
+  font-size: 12.5px;
+}
+
+.track-right {
+  color: var(--muted2);
+  font-size: 12.5px;
+  white-space: nowrap;
+  align-self: start;
+}
+
+/* =========================
+   Footer (pinned to bottom)
+========================= */
+
+footer {
+  border-top: 1px solid var(--stroke);
+  margin-top: auto; /* key for sticky footer */
+}
+
+.container-footer {
+  color: var(--muted2);
+  font-size: 12.5px;
+}
+
+/* =========================
+   Responsive
+========================= */
+
+@media (max-width: 1100px) {
+  .app-grid { grid-template-columns: 320px 1fr; }
+  .col-right { grid-column: 1 / -1; }
+
+  :root { --colMaxH: calc(100vh - 200px); }
+}
+
+@media (max-width: 860px) {
+  :root {
+    --pad: 16px;
+    --colMaxH: none;
+    --mobileListMaxH: 264px; /* 3-ish items */
+    --podThumb: 72px;
+    --podRadius: 18px;
+
+    /* Notes */
+    --noteTsW: 92px;
   }
 
-  function escapeHtml(str) {
-    return String(str ?? "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#39;");
+  .app-grid { grid-template-columns: 1fr; }
+  .panel { border-radius: 20px; }
+
+  .container-header,
+  .container-footer { padding-left: var(--pad); padding-right: var(--pad); }
+
+  main { padding-left: var(--pad); padding-right: var(--pad); }
+
+  .primary-button { width: 100%; min-width: 0; }
+  .container-header { flex-direction: column; align-items: stretch; }
+
+  /* On mobile: lock playlist + podcast lists to ~3 items visible */
+  .cards-scroll { max-height: var(--mobileListMaxH); }
+  .podcast-scroll { max-height: var(--mobileListMaxH); }
+
+  /* Note rows: give textarea more room */
+  .note-row {
+    grid-template-columns: 28px 86px 1fr 34px;
   }
 
-  function fmtHoursFromMs(ms) {
-    const h = (Number(ms) || 0) / 3600000;
-    return `${h.toFixed(h >= 10 ? 0 : 1)}h`;
+  /* Avoid mobile “background seams” from viewport height quirks */
+  body { min-height: 100%; }
+}
+
+@media (max-width: 420px) {
+  header h1 { font-size: 20px; }
+  .detail-head { grid-template-columns: 72px 1fr; }
+  .detail-thumb { width: 72px; height: 72px; border-radius: 16px; }
+
+  /* Notes: stack a bit tighter on very small widths */
+  .note-row {
+    grid-template-columns: 28px 80px 1fr 34px;
+    gap: 8px;
   }
-
-  function fmtDurationFromMs(ms) {
-    const totalSec = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
-    const m = Math.floor(totalSec / 60);
-    const s = totalSec % 60;
-    if (m < 60) return `${m}m ${String(s).padStart(2, "0")}s`;
-    const h = Math.floor(m / 60);
-    const mm = m % 60;
-    return `${h}h ${mm}m`;
-  }
-
-  function setStatus(msg) {
-    const el = document.getElementById("statusMessage");
-    if (!el) return;
-    el.textContent = msg || "";
-  }
-
-  function clampInt(v, min, max, fallback) {
-    const n = Number(v);
-    if (!Number.isFinite(n)) return fallback;
-    return Math.min(max, Math.max(min, Math.floor(n)));
-  }
-
-  function normalizeTimestamp(s) {
-    // Accept "SS", "MM:SS", "HH:MM:SS". Always return "HH:MM:SS".
-    const raw = String(s || "").trim();
-    if (!raw) return "00:00:00";
-
-    const parts = raw.split(":").map((x) => x.trim()).filter(Boolean);
-    if (parts.length === 1) {
-      const ss = clampInt(parts[0], 0, 59, 0);
-      return `00:00:${String(ss).padStart(2, "0")}`;
-    }
-    if (parts.length === 2) {
-      const mm = clampInt(parts[0], 0, 999, 0);
-      const ss = clampInt(parts[1], 0, 59, 0);
-      return `00:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
-    }
-    if (parts.length >= 3) {
-      const hh = clampInt(parts[0], 0, 999, 0);
-      const mm = clampInt(parts[1], 0, 59, 0);
-      const ss = clampInt(parts[2], 0, 59, 0);
-      return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
-    }
-    return "00:00:00";
-  }
-
-  function blankUntilClick() {
-    if (!appMain) return;
-    appMain.innerHTML = `
-      <p class="status" id="statusMessage">
-        Click “Refresh from Spotify” to load current live podcasts on Spotify.
-      </p>
-    `;
-  }
-
-  function buildShell() {
-    if (!appMain) return;
-
-    appMain.innerHTML = `
-      <p class="status" id="statusMessage"></p>
-
-      <div class="app-grid">
-
-        <!-- LEFT COLUMN -->
-        <div class="col col-left">
-
-          <section class="panel">
-            <div class="panel-header">
-              <h2 class="panel-title">Statistics</h2>
-            </div>
-            <div class="panel-body">
-              <div class="stats-grid" id="statsGrid"></div>
-            </div>
-          </section>
-
-          <section class="panel" style="margin-top:16px;">
-            <div class="panel-header">
-              <h2 class="panel-title">Others playlists</h2>
-            </div>
-            <div class="panel-body">
-              <div class="cards cards-compact" id="othersCards"></div>
-            </div>
-          </section>
-
-          <!-- YEAR SUMMARY AS ITS OWN PANEL -->
-          <section class="panel" style="margin-top:16px;">
-            <div class="panel-header">
-              <h2 class="panel-title">Year Summary Playlist</h2>
-            </div>
-            <div class="panel-body">
-              <div class="cards cards-compact" id="yearSummaryCards"></div>
-            </div>
-          </section>
-
-        </div>
-
-        <!-- MIDDLE COLUMN -->
-        <section class="panel col col-mid">
-          <div class="panel-body col-scroll-body">
-            <div class="filter-pills" id="filterPills"></div>
-
-            <div class="subpanel subpanel-flex" style="margin-top:12px;">
-              <div class="subpanel-header">
-                <h2 class="panel-title">Playlists</h2>
-                <div class="subpanel-count" id="playlistCount">–</div>
-              </div>
-              <div class="cards cards-scroll" id="playlistCards"></div>
-            </div>
-          </div>
-        </section>
-
-        <!-- RIGHT COLUMN -->
-        <aside class="panel col col-right">
-          <div class="panel-header">
-            <h2 class="panel-title">Podcast Episodes</h2>
-          </div>
-          <div class="panel-body col-scroll-body">
-
-            <div class="podcast-head" id="podcastHead" hidden>
-              <img class="podcast-thumb" id="podcastThumb" alt="">
-              <div style="min-width:0">
-                <div class="podcast-title" id="podcastTitle"></div>
-                <div class="podcast-sub" id="podcastSub"></div>
-              </div>
-            </div>
-
-            <!-- keep node (for layout), but no instructional text -->
-            <div class="podcast-empty" id="podcastEmpty"></div>
-
-            <div class="podcast-error" id="podcastError" hidden></div>
-
-            <ul class="podcast-list podcast-scroll" id="podcastList"></ul>
-          </div>
-        </aside>
-
-      </div>
-
-      <!-- MODAL -->
-      <div class="modal-backdrop" id="modalBackdrop" aria-hidden="true">
-        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
-          <div class="modal-top">
-            <h3 class="modal-title" id="modalTitle">Playlist</h3>
-            <button class="modal-close" id="modalCloseBtn" type="button">Close</button>
-          </div>
-
-          <div class="detail-head">
-            <img class="detail-thumb" id="detailThumb" alt="">
-            <div style="min-width:0">
-              <h3 class="detail-title" id="detailTitle"></h3>
-              <p class="detail-sub" id="detailSub"></p>
-            </div>
-          </div>
-
-          <ul class="tracklist" id="tracklist"></ul>
-        </div>
-      </div>
-    `;
-
-    const backdrop = document.getElementById("modalBackdrop");
-    const closeBtn = document.getElementById("modalCloseBtn");
-    if (closeBtn) closeBtn.addEventListener("click", closeModal);
-
-    if (backdrop) {
-      backdrop.addEventListener("click", (e) => {
-        if (e.target === backdrop) closeModal();
-      });
-    }
-
-    // bind Escape only once
-    if (!state._modalGlobalBound) {
-      state._modalGlobalBound = true;
-      document.addEventListener("keydown", (e) => {
-        if (e.key === "Escape") closeModal();
-      });
-    }
-  }
-
-  /***********************
-   * Cards
-   ***********************/
-  function cardHtml(p) {
-    const img = p.image || "https://spotify.jdge.cc/images/spotify_logo.png";
-    const count = typeof p.totalTracks === "number" ? `${p.totalTracks} items` : "";
-    const owner = p.ownerLabel ? ` • ${p.ownerLabel}` : "";
-    return `
-      <div class="card" data-playlist-id="${escapeHtml(p.id)}">
-        <img class="thumb" src="${escapeHtml(img)}" alt="" loading="lazy">
-        <div class="card-meta">
-          <p class="card-title">${escapeHtml(p.name || "Untitled")}</p>
-          <p class="card-sub">${escapeHtml(count)}${escapeHtml(owner)}</p>
-        </div>
-      </div>
-    `;
-  }
-
-  function wireCardClicks(containerEl) {
-    if (!containerEl) return;
-    containerEl.querySelectorAll(".card[data-playlist-id]").forEach((el) => {
-      el.addEventListener("click", async () => {
-        const id = el.getAttribute("data-playlist-id");
-        if (!id) return;
-        await openPlaylistModal(id);
-      });
-    });
-  }
-
-  /***********************
-   * Statistics
-   ***********************/
-  function renderStatistics() {
-    const grid = document.getElementById("statsGrid");
-    if (!grid) return;
-
-    const totals = state.snapshot?.totals || {};
-    const playlists = totals.playlists ?? "–";
-
-    const songs = totals.songs ?? "–";
-    const songHours = typeof totals.songMs === "number" ? fmtHoursFromMs(totals.songMs) : "–";
-
-    const podEps = totals.podcastEpisodes ?? "–";
-    const podHours = typeof totals.podcastMs === "number" ? fmtHoursFromMs(totals.podcastMs) : "–";
-
-    grid.innerHTML = `
-      <div class="stat-card span-2">
-        <div class="stat-kicker">Total playlists</div>
-        <div class="stat-big">${escapeHtml(String(playlists))}</div>
-      </div>
-
-      <div class="stat-card">
-        <div class="stat-kicker">Total songs</div>
-        <div class="stat-big">${escapeHtml(String(songs))}</div>
-      </div>
-
-      <div class="stat-card">
-        <div class="stat-kicker">Total Song Hrs</div>
-        <div class="stat-big">${escapeHtml(String(songHours))}</div>
-      </div>
-
-      <div class="stat-card">
-        <div class="stat-kicker">Podcast episodes</div>
-        <div class="stat-big">${escapeHtml(String(podEps))}</div>
-      </div>
-
-      <div class="stat-card">
-        <div class="stat-kicker">Podcast hrs</div>
-        <div class="stat-big">${escapeHtml(String(podHours))}</div>
-      </div>
-    `;
-  }
-
-  /***********************
-   * Filters + playlists
-   ***********************/
-  function getSection(name) {
-    const sections = state.snapshot?.sections || {};
-    const list = sections?.[name];
-    return Array.isArray(list) ? list : [];
-  }
-
-  function getFilteredPlaylists() {
-    const dailyMix = getSection("dailyMix");
-    const top = getSection("top");
-    const other = getSection("other");
-
-    if (state.filter === "dailyMix") return dailyMix;
-    if (state.filter === "top") return top;
-    if (state.filter === "other") return other;
-    return [...dailyMix, ...top, ...other];
-  }
-
-  function setFilter(next) {
-    state.filter = next;
-    renderFilterPills();
-    renderPlaylists();
-  }
-
-  function renderFilterPills() {
-    const pills = document.getElementById("filterPills");
-    if (!pills) return;
-
-    const dailyMix = getSection("dailyMix");
-    const top = getSection("top");
-    const other = getSection("other");
-    const allCount = dailyMix.length + top.length + other.length;
-
-    const pill = (key, label, count) => `
-      <button class="pill ${state.filter === key ? "active" : ""}" type="button" data-filter="${key}">
-        <span class="pill-label">${escapeHtml(label)}</span>
-        <span class="pill-count">${count}</span>
-      </button>
-    `;
-
-    pills.innerHTML =
-      pill("all", "All", allCount) +
-      pill("dailyMix", "Daily Mix", dailyMix.length) +
-      pill("top", "Top", top.length) +
-      pill("other", "Other", other.length);
-
-    pills.querySelectorAll("button[data-filter]").forEach((b) => {
-      b.addEventListener("click", () => setFilter(b.getAttribute("data-filter")));
-    });
-  }
-
-  function renderPlaylists() {
-    const cards = document.getElementById("playlistCards");
-    const count = document.getElementById("playlistCount");
-    if (!cards || !count) return;
-
-    const list = getFilteredPlaylists();
-    cards.innerHTML = list.map(cardHtml).join("");
-    count.textContent = String(list.length);
-    wireCardClicks(cards);
-  }
-
-  /***********************
-   * Manual panels (Others + Year Summary)
-   * Prefer refresh payload, fallback to per-ID fetch
-   ***********************/
-  async function fetchPlaylistMeta(playlistId, ownerLabelFallback) {
-    const res = await fetch(API_PLAYLIST, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ playlistId, limit: 0 })
-    });
-
-    const text = await res.text();
-    let data = null;
-    try { data = text ? JSON.parse(text) : null; } catch {}
-
-    if (!res.ok || !data?.playlist) {
-      console.error("Playlist meta API failure:", { status: res.status, data, text });
-      return null;
-    }
-
-    const p = data.playlist;
-    return {
-      id: p.id || playlistId,
-      name: p.name || "Untitled playlist",
-      url: p.url || null,
-      image: p.image || null,
-      totalTracks: typeof p.totalTracks === "number" ? p.totalTracks : null,
-      ownerLabel: p.ownerLabel || ownerLabelFallback
-    };
-  }
-
-  async function loadOthersAndYearSummaryFallback() {
-    // Others
-    if (!state.others.length) {
-      const others = [];
-      for (const id of OTHERS_PLAYLIST_IDS) {
-        const meta = await fetchPlaylistMeta(id, "by others");
-        if (meta) others.push(meta);
-      }
-      state.others = others;
-    }
-
-    // Year Summary
-    if (!state.yearSummary.length) {
-      const years = [];
-      for (const id of YEAR_SUMMARY_PLAYLIST_IDS) {
-        const meta = await fetchPlaylistMeta(id, "Spotify");
-        if (meta) years.push(meta);
-      }
-      state.yearSummary = years;
-    }
-  }
-
-  function renderOthers() {
-    const el = document.getElementById("othersCards");
-    if (!el) return;
-
-    el.innerHTML = state.others.length
-      ? state.others.map(cardHtml).join("")
-      : `<div class="muted-small">No “others” playlists added.</div>`;
-
-    wireCardClicks(el);
-  }
-
-  function renderYearSummary() {
-    const el = document.getElementById("yearSummaryCards");
-    if (!el) return;
-
-    el.innerHTML = state.yearSummary.length
-      ? state.yearSummary.map(cardHtml).join("")
-      : `<div class="muted-small">No year summary playlist added yet.</div>`;
-
-    wireCardClicks(el);
-  }
-
-  /***********************
-   * Episode Notes API (GitHub-backed via /api/episode-note)
-   ***********************/
-  function getEpisodeCacheEntry(episodeId) {
-    if (!episodeId) return null;
-    const c = state.episodeNotes.cache;
-    if (!c[episodeId]) {
-      c[episodeId] = {
-        notes: [{ timestamp: "00:00:00", text: "" }],
-        loaded: false,
-        loading: false,
-        saving: false,
-        savedAt: null,
-        error: null
-      };
-    }
-    return c[episodeId];
-  }
-
-  async function fetchEpisodeNotes(episodeId) {
-    const entry = getEpisodeCacheEntry(episodeId);
-    if (!entry) return null;
-
-    entry.error = null;
-    entry.loading = true;
-
-    const res = await fetch(`${API_EPISODE_NOTE}?episodeId=${encodeURIComponent(episodeId)}`, {
-      method: "GET",
-      headers: { Accept: "application/json" }
-    });
-
-    const text = await res.text();
-    let data = null;
-    try { data = text ? JSON.parse(text) : null; } catch {}
-
-    if (!res.ok) {
-      entry.loading = false;
-      const msg = (data && (data.error || data.message)) || text || `HTTP ${res.status}`;
-      throw new Error(msg);
-    }
-
-    const notes = Array.isArray(data?.notes) ? data.notes : [];
-    entry.notes = notes.length ? notes.map((n) => ({
-      timestamp: normalizeTimestamp(n?.timestamp),
-      text: String(n?.text || "")
-    })) : [{ timestamp: "00:00:00", text: "" }];
-
-    entry.loaded = true;
-    entry.loading = false;
-    entry.savedAt = null;
-    entry.error = null;
-    return entry;
-  }
-
-  async function saveEpisodeNotes(episodeId, notes) {
-    const entry = getEpisodeCacheEntry(episodeId);
-    if (!entry) return;
-
-    entry.saving = true;
-    entry.error = null;
-    entry.savedAt = null;
-    renderPodcastColumn();
-
-    const payload = {
-      episodeId,
-      notes: (notes || [])
-        .map((n) => ({
-          timestamp: normalizeTimestamp(n?.timestamp),
-          text: String(n?.text || "").trim()
-        }))
-        .filter((n) => n.timestamp || n.text)
-    };
-
-    if (!payload.notes.length) payload.notes = [{ timestamp: "00:00:00", text: "" }];
-
-    const res = await fetch(API_EPISODE_NOTE, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify(payload)
-    });
-
-    const text = await res.text();
-    let data = null;
-    try { data = text ? JSON.parse(text) : null; } catch {}
-
-    if (!res.ok) {
-      const msg = (data && (data.error || data.message)) || text || `HTTP ${res.status}`;
-      entry.saving = false;
-      entry.error = msg;
-      renderPodcastColumn();
-      throw new Error(msg);
-    }
-
-    entry.notes = payload.notes;
-    entry.loaded = true;
-    entry.loading = false;
-    entry.saving = false;
-    entry.error = null;
-    entry.savedAt = Date.now();
-
-    renderPodcastColumn();
-  }
-
-  function episodeHasNotes(episodeId) {
-    const entry = state.episodeNotes.cache?.[episodeId];
-    if (!entry || !Array.isArray(entry.notes)) return false;
-    return entry.notes.some((n) => String(n?.text || "").trim().length > 0);
-  }
-
-  /***********************
-   * Podcast panel
-   ***********************/
-  async function loadPodcastColumn() {
-    state.podcast.tried = true;
-    state.podcast.error = null;
-    state.podcast.playlist = null;
-    state.podcast.items = [];
-
-    try {
-      const res = await fetch(API_PLAYLIST, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ playlistId: PODCAST_PLAYLIST_ID, limit: PODCAST_COLUMN_LIMIT })
-      });
-
-      const text = await res.text();
-      let data = null;
-      try { data = text ? JSON.parse(text) : null; } catch {}
-
-      if (!res.ok || !data) {
-        const msg =
-          (data && (data.message || data.error)) ||
-          text ||
-          `HTTP ${res.status}`;
-
-        console.error("Podcast /api/playlist error payload:", { status: res.status, data, text });
-        state.podcast.error = msg;
-        return;
-      }
-
-      state.podcast.playlist = data.playlist || null;
-
-      const items = Array.isArray(data.items) ? data.items : [];
-
-      // Most recently added first:
-      // Prefer addedAt if present; otherwise reverse playlist order as fallback.
-      const withAddedAt = items.filter(x => x?.addedAt && !Number.isNaN(Date.parse(x.addedAt))).length;
-
-      if (withAddedAt >= 3) {
-        items.sort((a, b) => {
-          const ta = a?.addedAt ? Date.parse(a.addedAt) : 0;
-          const tb = b?.addedAt ? Date.parse(b.addedAt) : 0;
-          return tb - ta;
-        });
-      } else {
-        items.reverse();
-      }
-
-      state.podcast.items = items;
-    } catch (e) {
-      state.podcast.error = String(e?.message || e);
-    }
-  }
-
-  function renderPodcastColumn() {
-    const head = document.getElementById("podcastHead");
-    const empty = document.getElementById("podcastEmpty");
-    const errBox = document.getElementById("podcastError");
-    const thumb = document.getElementById("podcastThumb");
-    const title = document.getElementById("podcastTitle");
-    const sub = document.getElementById("podcastSub");
-    const list = document.getElementById("podcastList");
-    if (!head || !empty || !errBox || !thumb || !title || !sub || !list) return;
-
-    const tried = state.podcast.tried;
-    const error = state.podcast.error;
-    const p = state.podcast.playlist;
-    const items = state.podcast.items || [];
-
-    if (!tried) {
-      head.hidden = true;
-      errBox.hidden = true;
-      empty.style.display = "none";
-      list.innerHTML = "";
-      return;
-    }
-
-    empty.style.display = "none";
-
-    if (error) {
-      head.hidden = true;
-      errBox.hidden = false;
-      errBox.textContent = `Podcast playlist failed to load: ${error}`;
-      list.innerHTML = "";
-      return;
-    }
-
-    if (!p) {
-      head.hidden = true;
-      errBox.hidden = false;
-      errBox.textContent = "Podcast playlist data missing.";
-      list.innerHTML = "";
-      return;
-    }
-
-    errBox.hidden = true;
-    head.hidden = false;
-
-    thumb.src = p.image || "https://spotify.jdge.cc/images/spotify_logo.png";
-    title.textContent = p.name || "Podcast Episodes";
-    sub.textContent = `${items.length} items`;
-
-    list.innerHTML = items.map(renderPodcastItem).join("");
-
-    wirePodcastInteractions(list);
-  }
-
-  function renderPodcastItem(it) {
-    const episodeId = String(it?.id || "").trim();
-    const epImg = it.image || "https://spotify.jdge.cc/images/spotify_logo.png";
-    const name = escapeHtml(it.name || "Untitled");
-    const channel = escapeHtml((it.artists || []).join(", "));
-    const dur = fmtDurationFromMs(it.durationMs || 0);
-    const url = it.url || "#";
-
-    const isOpen = state.episodeNotes.openEpisodeId && episodeId && state.episodeNotes.openEpisodeId === episodeId;
-
-    const entry = episodeId ? state.episodeNotes.cache?.[episodeId] : null;
-    const hasNotes = episodeId ? episodeHasNotes(episodeId) : false;
-    const noteOpacity = hasNotes ? 1 : 0.25;
-
-    const saving = !!entry?.saving;
-    const loading = !!entry?.loading;
-    const err = entry?.error || null;
-    const savedAt = entry?.savedAt || null;
-
-    const editorHtml = isOpen && episodeId ? renderEpisodeNotesEditor(episodeId) : "";
-
-    const statusLine = isOpen && episodeId
-      ? `
-        <div class="epnote-status" data-epnote-status="${escapeHtml(episodeId)}">
-          ${loading ? "Loading…" : (saving ? "Saving…" : (err ? `Error: ${escapeHtml(err)}` : (savedAt ? "Saved ✓" : "")))}
-        </div>
-      `
-      : "";
-
-    const bubbleDisabled = episodeId ? "" : "disabled";
-
-    return `
-      <li class="podcast-item" data-episode-id="${escapeHtml(episodeId)}">
-        <div class="podcast-link podcast-link-grid">
-          <a class="podcast-ep-left" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" aria-label="Open on Spotify">
-            <img class="podcast-ep-thumb" src="${escapeHtml(epImg)}" alt="" loading="lazy">
-          </a>
-
-          <div class="podcast-ep-meta">
-            <div class="podcast-item-title">${name}</div>
-            <div class="podcast-item-sub">${channel ? channel + " • " : ""}${escapeHtml(dur)}</div>
-          </div>
-
-          <button
-            class="epnote-bubble"
-            type="button"
-            title="Notes"
-            aria-label="Notes"
-            data-epnote-toggle="${escapeHtml(episodeId)}"
-            style="opacity:${noteOpacity}"
-            ${bubbleDisabled}
-          >💭</button>
-        </div>
-
-        ${statusLine}
-        ${editorHtml}
-      </li>
-    `;
-  }
-
-  function renderEpisodeNotesEditor(episodeId) {
-    const entry = getEpisodeCacheEntry(episodeId);
-    const notes = Array.isArray(entry?.notes) && entry.notes.length
-      ? entry.notes
-      : [{ timestamp: "00:00:00", text: "" }];
-
-    const rowsHtml = notes.map((n, idx) => {
-      const ts = escapeHtml(normalizeTimestamp(n?.timestamp));
-      const tx = escapeHtml(String(n?.text || ""));
-      return `
-        <div class="epnote-row" data-epnote-row="${idx}">
-          <button class="epnote-add" type="button" title="Add row" aria-label="Add row" data-epnote-add="${escapeHtml(episodeId)}">👇🏻</button>
-
-          <input
-            class="epnote-time"
-            type="text"
-            inputmode="text"
-            spellcheck="false"
-            value="${ts}"
-            placeholder="00:00:00"
-            data-epnote-time="${escapeHtml(episodeId)}"
-          />
-
-          <textarea
-            class="epnote-text"
-            rows="1"
-            placeholder=""
-            data-epnote-text="${escapeHtml(episodeId)}"
-          >${tx}</textarea>
-
-          <button
-            class="epnote-save"
-            type="button"
-            title="Save"
-            aria-label="Save"
-            data-epnote-save="${escapeHtml(episodeId)}"
-          >✅</button>
-        </div>
-      `;
-    }).join("");
-
-    return `
-      <div class="epnote-editor" data-epnote-editor="${escapeHtml(episodeId)}">
-        ${rowsHtml}
-      </div>
-    `;
-  }
-
-  function wirePodcastInteractions(listEl) {
-    if (!listEl) return;
-
-    if (listEl.__epnoteBound) return;
-    listEl.__epnoteBound = true;
-
-    listEl.addEventListener("click", async (e) => {
-      const t = e.target;
-
-      const toggleId = t?.getAttribute?.("data-epnote-toggle");
-      if (toggleId) {
-        e.preventDefault();
-        if (!toggleId) return;
-        await toggleEpisodeEditor(toggleId);
-        return;
-      }
-
-      const addId = t?.getAttribute?.("data-epnote-add");
-      if (addId) {
-        e.preventDefault();
-        addEpisodeRow(addId);
-        return;
-      }
-
-      const saveId = t?.getAttribute?.("data-epnote-save");
-      if (saveId) {
-        e.preventDefault();
-        await saveEpisodeFromDom(saveId);
-        return;
-      }
-    });
-
-    listEl.addEventListener("input", (e) => {
-      const ta = e.target;
-      if (ta && ta.classList && ta.classList.contains("epnote-text")) {
-        ta.style.height = "auto";
-        ta.style.height = `${Math.min(180, ta.scrollHeight)}px`;
-      }
-    });
-  }
-
-  async function toggleEpisodeEditor(episodeId) {
-    if (!episodeId) return;
-
-    if (state.episodeNotes.openEpisodeId === episodeId) {
-      state.episodeNotes.openEpisodeId = null;
-      renderPodcastColumn();
-      return;
-    }
-
-    state.episodeNotes.openEpisodeId = episodeId;
-
-    const entry = getEpisodeCacheEntry(episodeId);
-    renderPodcastColumn();
-
-    if (!entry.loaded && !entry.loading) {
-      try {
-        entry.error = null;
-        entry.loading = true;
-        renderPodcastColumn();
-        await fetchEpisodeNotes(episodeId);
-      } catch (err) {
-        entry.loading = false;
-        entry.error = String(err?.message || err);
-      }
-      renderPodcastColumn();
-    } else {
-      renderPodcastColumn();
-    }
-  }
-
-  function addEpisodeRow(episodeId) {
-    if (!episodeId) return;
-    const entry = getEpisodeCacheEntry(episodeId);
-    if (!entry) return;
-
-    if (!Array.isArray(entry.notes)) entry.notes = [];
-    entry.notes.push({ timestamp: "00:00:00", text: "" });
-
-    state.episodeNotes.openEpisodeId = episodeId;
-    renderPodcastColumn();
-  }
-
-  function collectEpisodeNotesFromDom(episodeId) {
-    const li = document.querySelector(`.podcast-item[data-episode-id="${CSS.escape(episodeId)}"]`);
-    if (!li) return [{ timestamp: "00:00:00", text: "" }];
-
-    const timeEls = Array.from(li.querySelectorAll(`input[data-epnote-time="${CSS.escape(episodeId)}"]`));
-    const textEls = Array.from(li.querySelectorAll(`textarea[data-epnote-text="${CSS.escape(episodeId)}"]`));
-
-    const rows = Math.max(timeEls.length, textEls.length);
-    const out = [];
-    for (let i = 0; i < rows; i++) {
-      const ts = normalizeTimestamp(timeEls[i]?.value || "00:00:00");
-      const tx = String(textEls[i]?.value || "").trim();
-      out.push({ timestamp: ts, text: tx });
-    }
-    return out;
-  }
-
-  async function saveEpisodeFromDom(episodeId) {
-    if (!episodeId) return;
-
-    const entry = getEpisodeCacheEntry(episodeId);
-    if (!entry) return;
-    if (entry.saving) return;
-
-    const rows = collectEpisodeNotesFromDom(episodeId);
-
-    entry.notes = rows.map((r) => ({ timestamp: normalizeTimestamp(r.timestamp), text: String(r.text || "") }));
-    entry.loaded = true;
-    entry.loading = false;
-    entry.error = null;
-    entry.savedAt = null;
-
-    try {
-      await saveEpisodeNotes(episodeId, rows);
-    } catch (err) {
-      console.error(err);
-    }
-  }
-
-  /***********************
-   * Modal
-   ***********************/
-  function openModal() {
-    const backdrop = document.getElementById("modalBackdrop");
-    if (!backdrop) return;
-    backdrop.classList.add("open");
-    backdrop.setAttribute("aria-hidden", "false");
-  }
-
-  function closeModal() {
-    const backdrop = document.getElementById("modalBackdrop");
-    if (!backdrop) return;
-    backdrop.classList.remove("open");
-    backdrop.setAttribute("aria-hidden", "true");
-  }
-
-  async function openPlaylistModal(playlistId) {
-    setStatus("Loading playlist…");
-    openModal();
-
-    const detailThumb = document.getElementById("detailThumb");
-    const detailTitle = document.getElementById("detailTitle");
-    const detailSub = document.getElementById("detailSub");
-    const tracklist = document.getElementById("tracklist");
-    if (!detailThumb || !detailTitle || !detailSub || !tracklist) return;
-
-    detailThumb.src = "https://spotify.jdge.cc/images/spotify_logo.png";
-    detailTitle.textContent = "Loading…";
-    detailSub.textContent = "";
-    tracklist.innerHTML = "";
-
-    try {
-      const res = await fetch(API_PLAYLIST, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ playlistId })
-      });
-
-      const text = await res.text();
-      let data = null;
-      try { data = text ? JSON.parse(text) : null; } catch {}
-
-      if (!res.ok) {
-        const msg =
-          (data && (data.message || data.error)) ||
-          text ||
-          `HTTP ${res.status}`;
-
-        console.error("Playlist modal /api/playlist error payload:", { status: res.status, data, text });
-        throw new Error(msg);
-      }
-
-      const p = data.playlist || {};
-      const items = Array.isArray(data.items) ? data.items : [];
-
-      detailThumb.src = p.image || "https://spotify.jdge.cc/images/spotify_logo.png";
-      detailTitle.textContent = p.name || "Untitled playlist";
-
-      const bits = [];
-      if (typeof p.totalTracks === "number") bits.push(`${p.totalTracks} items`);
-      if (p.ownerLabel) bits.push(p.ownerLabel);
-      detailSub.textContent = bits.join(" • ");
-
-      tracklist.innerHTML = items.map(renderTrack).join("");
-      setStatus("");
-    } catch (err) {
-      console.error(err);
-      setStatus(`Playlist load failed: ${String(err.message || err)}`);
-      tracklist.innerHTML = `<li class="track"><div class="track-main">
-        <div class="track-name">Failed to load playlist</div>
-        <div class="track-meta">${escapeHtml(String(err.message || err))}</div>
-      </div></li>`;
-    }
-  }
-
-  function renderTrack(t) {
-    const name = escapeHtml(t.name || "Untitled");
-    const artists = escapeHtml((t.artists || []).join(", "));
-    const url = t.url || "#";
-    const ms = Number(t.durationMs) || 0;
-    const mins = ms ? `${Math.round(ms / 60000)}m` : "";
-    return `
-      <li class="track">
-        <div class="track-main">
-          <a class="track-name" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${name}</a>
-          <div class="track-meta">${artists}</div>
-        </div>
-        <div class="track-right">${escapeHtml(mins)}</div>
-      </li>
-    `;
-  }
-
-  /***********************
-   * Refresh
-   ***********************/
-  async function refreshFromSpotify() {
-    buildShell();
-    setButtonLoading(true);
-    setStatus("Refreshing from Spotify…");
-
-    try {
-      const res = await fetch(API_REFRESH, { method: "POST", headers: { Accept: "application/json" } });
-
-      const text = await res.text();
-      let data = null;
-      try { data = text ? JSON.parse(text) : null; } catch {}
-
-      if (!res.ok) {
-        const msg =
-          (data && (data.message || data.error)) ||
-          text ||
-          `HTTP ${res.status}`;
-
-        console.error("Refresh API error payload:", { status: res.status, data, text });
-        throw new Error(msg);
-      }
-
-      state.snapshot = data;
-      state.filter = "all";
-
-      state.others = Array.isArray(data?.othersPlaylists)
-        ? data.othersPlaylists.map(p => ({ ...p, ownerLabel: p.ownerLabel || "by others" }))
-        : [];
-
-      state.yearSummary = Array.isArray(data?.yearSummaryPlaylists)
-        ? data.yearSummaryPlaylists.map(p => ({ ...p, ownerLabel: p.ownerLabel || "Spotify" }))
-        : [];
-
-      state.episodeNotes.openEpisodeId = null;
-
-      await Promise.all([
-        loadOthersAndYearSummaryFallback(),
-        loadPodcastColumn()
-      ]);
-
-      renderStatistics();
-      renderFilterPills();
-      renderPlaylists();
-      renderOthers();
-      renderYearSummary();
-      renderPodcastColumn();
-
-      setStatus("");
-    } catch (err) {
-      console.error(err);
-      setStatus(`Refresh failed: ${String(err?.message || err)}`);
-    } finally {
-      setButtonLoading(false);
-    }
-  }
-
-  /***********************
-   * Boot
-   ***********************/
-  document.addEventListener("DOMContentLoaded", () => {
-    blankUntilClick();
-    if (refreshButton) refreshButton.addEventListener("click", refreshFromSpotify);
-  });
-})();
+}
