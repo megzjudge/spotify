@@ -22,7 +22,8 @@
     "37i9dQZEVXd4WLIGflDMQQ"
   ];
 
-  const PODCAST_COLUMN_LIMIT = 120;
+  // ✅ Updated to match your "top snippet" desire: fetch more + newest-first
+  const PODCAST_COLUMN_LIMIT = 200;
 
   /***********************
    * DOM
@@ -71,6 +72,7 @@
     return `${h.toFixed(h >= 10 ? 0 : 1)}h`;
   }
 
+  // ✅ Keep your full app duration formatting
   function fmtDurationFromMs(ms) {
     const totalSec = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
     const m = Math.floor(totalSec / 60);
@@ -126,6 +128,9 @@
     `;
   }
 
+  /***********************
+   * Shell
+   ***********************/
   function buildShell() {
     if (!appMain) return;
 
@@ -199,7 +204,8 @@
             <div class="podcast-empty" id="podcastEmpty"></div>
             <div class="podcast-error" id="podcastError" hidden></div>
 
-            <ul class="podcast-list podcast-scroll" id="podcastList"></ul>
+            <!-- ✅ keep id and class as your CSS expects -->
+            <ul class="podcast-list" id="podcastList"></ul>
           </div>
         </aside>
 
@@ -234,9 +240,14 @@
         if (e.target === backdrop) closeModal();
       });
     }
-    document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") closeModal();
-    });
+
+    // ✅ only bind Escape once per boot (avoid duplicates across refreshes)
+    if (!document.__spotifyEscapeBound) {
+      document.__spotifyEscapeBound = true;
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") closeModal();
+      });
+    }
   }
 
   /***********************
@@ -582,8 +593,7 @@
 
       const items = Array.isArray(data.items) ? data.items : [];
 
-      // ✅ newest-first:
-      // Prefer addedAt if present; otherwise reverse so newest appears at top.
+      // ✅ newest-first (your top snippet request)
       const anyAddedAt = items.some((x) => !!x?.addedAt);
       if (anyAddedAt) {
         items.sort((a, b) => {
@@ -663,7 +673,6 @@
 
     const isOpen = state.episodeNotes.openEpisodeId && episodeId && state.episodeNotes.openEpisodeId === episodeId;
     const hasNotes = episodeId ? episodeHasNotes(episodeId) : false;
-    const noteOpacity = hasNotes ? 1 : 0.25;
 
     const entry = episodeId ? state.episodeNotes.cache?.[episodeId] : null;
     const saving = !!entry?.saving;
@@ -682,7 +691,7 @@
 
     return `
       <li class="podcast-item" data-episode-id="${escapeHtml(episodeId)}">
-        <div class="podcast-link podcast-link-grid">
+        <div class="podcast-link-grid">
           <a class="podcast-ep-left" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" aria-label="Open on Spotify">
             <img class="podcast-ep-thumb" src="${escapeHtml(epImg)}" alt="" loading="lazy">
           </a>
@@ -693,12 +702,11 @@
           </div>
 
           <button
-            class="epnote-bubble"
+            class="epnote-bubble${hasNotes ? " has-notes" : ""}"
             type="button"
             title="Notes"
             aria-label="Notes"
             data-epnote-toggle="${escapeHtml(episodeId)}"
-            style="opacity:${noteOpacity}"
           >💭</button>
         </div>
 
@@ -757,8 +765,9 @@
   }
 
   function wirePodcastInteractions(listEl) {
-    if (listEl.__epnoteBound) return;
-    listEl.__epnoteBound = true;
+    // ✅ Re-bind every re-render (because listEl is stable, but contents change)
+    if (listEl.__epnoteDelegationBound) return;
+    listEl.__epnoteDelegationBound = true;
 
     listEl.addEventListener("click", async (e) => {
       const t = e.target;
