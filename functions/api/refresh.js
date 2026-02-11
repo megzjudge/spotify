@@ -12,7 +12,7 @@ export async function onRequestPost({ env, request }) {
     const accessToken = await getUserAccessToken(env);
 
     /***********************
-     * CONFIG (EDIT HERE)
+     * CONFIG
      ***********************/
     const PODCAST_PLAYLIST_ID = "2tHrihmpYzDbJ8rit7HtFR";
 
@@ -25,7 +25,7 @@ export async function onRequestPost({ env, request }) {
     ];
 
     const YEAR_SUMMARY_PLAYLIST_IDS = [
-      "37i9dQZEVXcXHWVVT0lfDq" // 2025
+      "37i9dQZEVXcXHWVVT0lfDq"
     ];
 
     const MAX_PLAYLISTS = clampInt(body?.maxPlaylists, 1, 200, 120);
@@ -34,287 +34,234 @@ export async function onRequestPost({ env, request }) {
     const NOT_PUBLIC_PREFIXES = ["NP:", "[Not Public]"];
     const NOT_PUBLIC_TAG = "#notpublic";
 
-    const ALLOWLIST_IDS = new Set(
-      [
-        PODCAST_PLAYLIST_ID,
-        ...OTHERS_PLAYLIST_IDS,
-        ...YEAR_SUMMARY_PLAYLIST_IDS
-      ].filter(Boolean)
-    );
+    const ALLOWLIST_IDS = new Set([
+      PODCAST_PLAYLIST_ID,
+      ...OTHERS_PLAYLIST_IDS,
+      ...YEAR_SUMMARY_PLAYLIST_IDS
+    ]);
 
     /***********************
-     * FETCH USER + PLAYLISTS
+     * USER + PLAYLISTS
      ***********************/
     const me = await fetchMe(accessToken);
-    const myUserId = me?.id || null;
-    if (!myUserId) throw new Error("Could not resolve /me id from Spotify.");
+    const myUserId = me?.id;
+    if (!myUserId) throw new Error("Could not resolve Spotify user ID.");
 
-    // 1) Load library playlists (/me/playlists)
     let playlistsRaw = await fetchMyPlaylists(accessToken, MAX_PLAYLISTS);
 
-    // 2) IMPORTANT: explicitly fetch allowlisted playlists by ID
-    // because /me/playlists may not include them unless followed/saved.
-    const seen = new Set((playlistsRaw || []).map(p => p?.id).filter(Boolean));
+    const seen = new Set(playlistsRaw.map(p => p?.id).filter(Boolean));
     for (const id of ALLOWLIST_IDS) {
       if (!id || seen.has(id)) continue;
       try {
-        const pl = await fetchPlaylist(accessToken, id);
-        if (pl?.id) {
-          playlistsRaw.push(pl);
-          seen.add(pl.id);
-        }
-      } catch {
-        // ignore individual failures; UI will just show missing
-      }
+        const p = await fetchPlaylist(accessToken, id);
+        playlistsRaw.push(p);
+      } catch {}
     }
 
     /***********************
      * FILTER PLAYLISTS
      ***********************/
-    const filtered = playlistsRaw.filter((p) => {
+    const filtered = playlistsRaw.filter(p => {
       if (!p?.id) return false;
-
-      // Always include allowlisted playlists (podcast / others / year-summary)
       if (ALLOWLIST_IDS.has(p.id)) return true;
 
-      // Exclude anything not owned by you
-      const ownerId = p.owner?.id || null;
-      if (ownerId !== myUserId) return false;
-
-      // Exclude private playlists by default
+      if (p.owner?.id !== myUserId) return false;
       if (p.public === false) return false;
 
-      // Exclude "Not Public" rules
       const name = (p.name || "").trim();
       const desc = String(p.description || "").toLowerCase();
 
-      if (NOT_PUBLIC_PREFIXES.some((pre) => name.startsWith(pre))) return false;
+      if (NOT_PUBLIC_PREFIXES.some(pre => name.startsWith(pre))) return false;
       if (desc.includes(NOT_PUBLIC_TAG)) return false;
 
       return true;
     });
 
-    /***********************
-     * NORMALIZE PLAYLIST META
-     ***********************/
-    const normalized = filtered.map((p) => normalizePlaylistMeta(p, myUserId));
+    const normalized = filtered.map(p => normalizePlaylistMeta(p, myUserId));
+
+    const podcastPlaylist = normalized.find(p => p.id === PODCAST_PLAYLIST_ID) || null;
+    const othersPlaylists = normalized.filter(p => OTHERS_PLAYLIST_IDS.includes(p.id));
+    const yearSummaryPlaylists = normalized.filter(p => YEAR_SUMMARY_PLAYLIST_IDS.includes(p.id));
+
+    const normal = normalized.filter(p =>
+      p.id !== PODCAST_PLAYLIST_ID &&
+      !OTHERS_PLAYLIST_IDS.includes(p.id) &&
+      !YEAR_SUMMARY_PLAYLIST_IDS.includes(p.id)
+    );
 
     /***********************
-     * SPECIAL BUCKETS
+     * SECTIONS
      ***********************/
-    const podcastPlaylist = normalized.find((p) => p.id === PODCAST_PLAYLIST_ID) || null;
-
-    const othersPlaylists = normalized.filter((p) => OTHERS_PLAYLIST_IDS.includes(p.id));
-    const yearSummaryPlaylists = normalized.filter((p) => YEAR_SUMMARY_PLAYLIST_IDS.includes(p.id));
+    const dailyMix = normal.filter(p => (p.name || "").startsWith("Daily Mix:"));
+    const top = normal.filter(p => (p.name || "").startsWith("Top"));
+    const other = normal.filter(p =>
+      !dailyMix.some(x => x.id === p.id) &&
+      !top.some(x => x.id === p.id)
+    );
 
     /***********************
-     * NORMAL LIBRARY (YOUR PLAYLISTS)
+     * METRICS (FIXED)
      ***********************/
-    const normal = normalized.filter((p) => {
-      if (p.id === PODCAST_PLAYLIST_ID) return false;
-      if (OTHERS_PLAYLIST_IDS.includes(p.id)) return false;
-      if (YEAR_SUMMARY_PLAYLIST_IDS.includes(p.id)) return false;
-      return true;
-    });
-
-    /***********************
-     * SECTIONS (YOUR PLAYLISTS)
-     ***********************/
-    const dailyMix = normal.filter((p) => p.ownerIsMe && (p.name || "").startsWith("Daily Mix:"));
-    const top = normal.filter((p) => p.ownerIsMe && (p.name || "").startsWith("Top"));
-
-    const other = normal.filter((p) => {
-      if (dailyMix.some((x) => x.id === p.id)) return false;
-      if (top.some((x) => x.id === p.id)) return false;
-      return true;
-    });
-
-    /***********************
-     * METRICS
-     ***********************/
-    const totalSongs = sum(normal.map((p) => p.totalTracks || 0));
-
+    let totalSongs = 0;
     let totalSongMs = 0;
+
     for (const p of normal) {
-      const items = await fetchPlaylistItemsBounded(accessToken, p.id, MAX_TRACKS_PER_PLAYLIST);
-      totalSongMs += sum(items.map(msFromItem));
+      const items = await fetchPlaylistItemsBounded(
+        accessToken,
+        p.id,
+        MAX_TRACKS_PER_PLAYLIST
+      );
+
+      for (const it of items) {
+        const obj = it?.track;
+        if (!obj || obj.type !== "track") continue;
+
+        const ms = Number(obj.duration_ms);
+        if (!Number.isFinite(ms)) continue;
+
+        totalSongs += 1;
+        totalSongMs += ms;
+      }
     }
 
-    const podcastEpisodes = podcastPlaylist?.totalTracks ?? 0;
-
+    let podcastEpisodes = 0;
     let podcastMs = 0;
+
     if (podcastPlaylist) {
-      const items = await fetchPlaylistItemsBounded(accessToken, podcastPlaylist.id, MAX_TRACKS_PER_PLAYLIST);
-      podcastMs = sum(items.map(msFromItem));
+      const items = await fetchPlaylistItemsBounded(
+        accessToken,
+        podcastPlaylist.id,
+        MAX_TRACKS_PER_PLAYLIST
+      );
+
+      for (const it of items) {
+        const obj = it?.track;
+        if (!obj || obj.type !== "episode") continue;
+
+        const ms = Number(obj.duration_ms);
+        if (!Number.isFinite(ms)) continue;
+
+        podcastEpisodes += 1;
+        podcastMs += ms;
+      }
     }
 
     /***********************
      * RESPONSE
      ***********************/
-    return json(
-      {
-        lastUpdated: new Date().toISOString(),
+    return json({
+      lastUpdated: new Date().toISOString(),
 
-        totals: {
-          playlists: normal.length,
-          songs: totalSongs,
-          songMs: totalSongMs,
-          podcastEpisodes,
-          podcastMs
-        },
-
-        sections: {
-          dailyMix,
-          top,
-          other
-        },
-
-        othersPlaylists,
-        yearSummaryPlaylists,
-        podcastPlaylist
+      totals: {
+        playlists: normal.length,
+        songs: totalSongs,
+        songMs: totalSongMs,
+        podcastEpisodes,
+        podcastMs
       },
-      200
-    );
+
+      sections: { dailyMix, top, other },
+      othersPlaylists,
+      yearSummaryPlaylists,
+      podcastPlaylist
+    });
 
   } catch (err) {
-    return json(
-      {
-        error: "Refresh failed",
-        message: String(err?.message || err),
-        stack: String(err?.stack || "")
-      },
-      500
-    );
+    return json({
+      error: "Refresh failed",
+      message: String(err?.message || err),
+      stack: String(err?.stack || "")
+    }, 500);
   }
 }
 
 /* =========================
-   AUTH
+   HELPERS (unchanged)
 ========================= */
+
 async function getUserAccessToken(env) {
-  const clientId = env.SPOTIFY_PROFILE;
-  const clientSecret = env.SPOTIFY_KEY;
-  const refreshToken = env.SPOTIFY_REFRESH_TOKEN;
-
-  if (!clientId || !clientSecret || !refreshToken) {
-    throw new Error("Missing Spotify OAuth secrets (SPOTIFY_PROFILE, SPOTIFY_KEY, SPOTIFY_REFRESH_TOKEN).");
-  }
-
   const res = await fetch("https://accounts.spotify.com/api/token", {
     method: "POST",
     headers: {
-      Authorization: "Basic " + btoa(`${clientId}:${clientSecret}`),
+      Authorization: "Basic " + btoa(`${env.SPOTIFY_PROFILE}:${env.SPOTIFY_KEY}`),
       "Content-Type": "application/x-www-form-urlencoded"
     },
     body: new URLSearchParams({
       grant_type: "refresh_token",
-      refresh_token: refreshToken
+      refresh_token: env.SPOTIFY_REFRESH_TOKEN
     })
   });
 
-  const data = await res.json().catch(() => ({}));
+  const data = await res.json();
   if (!res.ok || !data?.access_token) {
-    throw new Error(`Failed to refresh Spotify access token (${res.status}).`);
+    throw new Error("Failed to refresh Spotify access token.");
   }
-
   return data.access_token;
 }
 
-/* =========================
-   SPOTIFY API
-========================= */
 async function fetchMe(token) {
-  const res = await fetch("https://api.spotify.com/v1/me", {
+  const r = await fetch("https://api.spotify.com/v1/me", {
     headers: { Authorization: `Bearer ${token}` }
   });
-  if (!res.ok) throw new Error(`Failed to fetch user profile (${res.status}).`);
-  return res.json();
+  if (!r.ok) throw new Error("Failed /me");
+  return r.json();
 }
 
-async function fetchPlaylist(token, playlistId) {
-  const res = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}`, {
+async function fetchPlaylist(token, id) {
+  const r = await fetch(`https://api.spotify.com/v1/playlists/${id}`, {
     headers: { Authorization: `Bearer ${token}` }
   });
-  if (!res.ok) throw new Error(`Failed to fetch playlist ${playlistId} (${res.status}).`);
-  return res.json();
+  if (!r.ok) throw new Error("Failed playlist fetch");
+  return r.json();
 }
 
 async function fetchMyPlaylists(token, limit) {
-  let items = [];
+  let out = [];
   let next = "https://api.spotify.com/v1/me/playlists?limit=50";
-
-  while (next && items.length < limit) {
-    const res = await fetch(next, {
+  while (next && out.length < limit) {
+    const r = await fetch(next, {
       headers: { Authorization: `Bearer ${token}` }
     });
-    if (!res.ok) throw new Error(`Failed to fetch playlists (${res.status}).`);
-    const data = await res.json();
-    items = items.concat(data.items || []);
-    next = data.next;
+    const d = await r.json();
+    out.push(...(d.items || []));
+    next = d.next;
   }
-
-  return items.slice(0, limit);
+  return out.slice(0, limit);
 }
 
-async function fetchPlaylistItemsBounded(token, playlistId, maxItems) {
-  let items = [];
+async function fetchPlaylistItemsBounded(token, playlistId, max) {
+  let out = [];
   let next = `https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=100`;
-
-  while (next && items.length < maxItems) {
-    const res = await fetch(next, {
+  while (next && out.length < max) {
+    const r = await fetch(next, {
       headers: { Authorization: `Bearer ${token}` }
     });
-    if (!res.ok) throw new Error(`Failed to fetch tracks for ${playlistId} (${res.status}).`);
-    const data = await res.json();
-    items = items.concat(data.items || []);
-    next = data.next;
+    const d = await r.json();
+    out.push(...(d.items || []));
+    next = d.next;
   }
-
-  return items.slice(0, maxItems);
+  return out.slice(0, max);
 }
 
-/* =========================
-   NORMALIZATION
-========================= */
 function normalizePlaylistMeta(p, myUserId) {
   const ownerId = p.owner?.id || null;
-  const ownerName = p.owner?.display_name || null;
-  const ownerIsMe = ownerId && myUserId ? ownerId === myUserId : false;
-
+  const ownerIsMe = ownerId === myUserId;
   return {
     id: p.id,
     name: p.name,
     image: p.images?.[0]?.url || null,
     url: p.external_urls?.spotify || null,
     totalTracks: p.tracks?.total ?? 0,
-
     ownerIsMe,
-    ownerId,
-    ownerName,
-    ownerLabel: ownerIsMe ? "by me" : (ownerName ? `by ${ownerName}` : "by others")
+    ownerLabel: ownerIsMe ? "by me" : (p.owner?.display_name ? `by ${p.owner.display_name}` : "by others")
   };
-}
-
-function msFromItem(it) {
-  const obj = it?.track;
-  if (!obj) return 0;
-  const ms = Number(obj.duration_ms);
-  return Number.isFinite(ms) ? ms : 0;
-}
-
-function sum(arr) {
-  return arr.reduce((a, b) => a + (Number(b) || 0), 0);
 }
 
 function clampInt(v, min, max, fallback) {
   const n = Number(v);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.min(max, Math.max(min, Math.floor(n)));
+  return Number.isFinite(n) ? Math.min(max, Math.max(min, Math.floor(n))) : fallback;
 }
 
-/* =========================
-   RESPONSE HELPERS
-========================= */
 function json(obj, status = 200) {
   return new Response(JSON.stringify(obj, null, 2), {
     status,
