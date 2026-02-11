@@ -22,7 +22,7 @@
     "37i9dQZEVXd4WLIGflDMQQ"
   ];
 
-  // ✅ Updated to match your "top snippet" desire: fetch more + newest-first
+  // We still fetch plenty; CSS limits the visible height.
   const PODCAST_COLUMN_LIMIT = 200;
 
   /***********************
@@ -72,7 +72,6 @@
     return `${h.toFixed(h >= 10 ? 0 : 1)}h`;
   }
 
-  // ✅ Keep your full app duration formatting
   function fmtDurationFromMs(ms) {
     const totalSec = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
     const m = Math.floor(totalSec / 60);
@@ -128,9 +127,6 @@
     `;
   }
 
-  /***********************
-   * Shell
-   ***********************/
   function buildShell() {
     if (!appMain) return;
 
@@ -204,7 +200,7 @@
             <div class="podcast-empty" id="podcastEmpty"></div>
             <div class="podcast-error" id="podcastError" hidden></div>
 
-            <!-- ✅ keep id and class as your CSS expects -->
+            <!-- ✅ UL is the scroll container (CSS locks to 8 visible rows on desktop) -->
             <ul class="podcast-list" id="podcastList"></ul>
           </div>
         </aside>
@@ -240,14 +236,9 @@
         if (e.target === backdrop) closeModal();
       });
     }
-
-    // ✅ only bind Escape once per boot (avoid duplicates across refreshes)
-    if (!document.__spotifyEscapeBound) {
-      document.__spotifyEscapeBound = true;
-      document.addEventListener("keydown", (e) => {
-        if (e.key === "Escape") closeModal();
-      });
-    }
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") closeModal();
+    });
   }
 
   /***********************
@@ -591,9 +582,12 @@
 
       state.podcast.playlist = data.playlist || null;
 
-      const items = Array.isArray(data.items) ? data.items : [];
+      let items = Array.isArray(data.items) ? data.items : [];
 
-      // ✅ newest-first (your top snippet request)
+      // keep only episodes, just in case something else sneaks in
+      items = items.filter((x) => (x?.type || "") === "episode");
+
+      // newest-first: prefer addedAt if present, else reverse
       const anyAddedAt = items.some((x) => !!x?.addedAt);
       if (anyAddedAt) {
         items.sort((a, b) => {
@@ -673,6 +667,7 @@
 
     const isOpen = state.episodeNotes.openEpisodeId && episodeId && state.episodeNotes.openEpisodeId === episodeId;
     const hasNotes = episodeId ? episodeHasNotes(episodeId) : false;
+    const noteOpacity = hasNotes ? 1 : 0.25;
 
     const entry = episodeId ? state.episodeNotes.cache?.[episodeId] : null;
     const saving = !!entry?.saving;
@@ -702,11 +697,12 @@
           </div>
 
           <button
-            class="epnote-bubble${hasNotes ? " has-notes" : ""}"
+            class="epnote-bubble"
             type="button"
             title="Notes"
             aria-label="Notes"
             data-epnote-toggle="${escapeHtml(episodeId)}"
+            style="opacity:${noteOpacity}"
           >💭</button>
         </div>
 
@@ -765,9 +761,8 @@
   }
 
   function wirePodcastInteractions(listEl) {
-    // ✅ Re-bind every re-render (because listEl is stable, but contents change)
-    if (listEl.__epnoteDelegationBound) return;
-    listEl.__epnoteDelegationBound = true;
+    if (listEl.__epnoteBound) return;
+    listEl.__epnoteBound = true;
 
     listEl.addEventListener("click", async (e) => {
       const t = e.target;
