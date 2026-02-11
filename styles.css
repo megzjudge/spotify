@@ -46,11 +46,18 @@
   --noteIconOpacityFull: 1;
 
   /* =========================
-     NEW: Force podcast list to ~8 visible episodes on desktop
+     Force podcast list to ~8 visible episodes on desktop
+     (single authoritative sizing)
      ========================= */
   --podVisibleRows: 8;
-  --podRowH: calc(var(--podThumb) + 24px); /* thumb + row padding */
-  --podRowGap: 10px;                       /* matches .podcast-list gap */
+
+  /* row height is thumb + padding (12 top + 12 bottom) */
+  --podRowH: calc(var(--podThumb) + 24px);
+
+  /* matches .podcast-list gap */
+  --podRowGap: 10px;
+
+  /* fixed list viewport height */
   --podListH: calc(
     (var(--podVisibleRows) * var(--podRowH)) +
     ((var(--podVisibleRows) - 1) * var(--podRowGap))
@@ -466,10 +473,7 @@ main {
   font-size: 12.5px;
 }
 
-/* keep element available, but you’re no longer showing instructional text */
-.podcast-empty {
-  display: none;
-}
+.podcast-empty { display: none; }
 
 .podcast-error {
   color: rgba(255,255,255,0.86);
@@ -480,6 +484,7 @@ main {
   font-size: 13px;
 }
 
+/* LIST */
 .podcast-list {
   list-style: none;
   padding: 0;
@@ -487,17 +492,31 @@ main {
 
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--podRowGap);
 
   min-height: 0;
+
+  /* ✅ THE ONLY authoritative 8-row viewport */
+  height: var(--podListH);
+  overflow: auto;
+
+  /* Firefox */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.18) rgba(0,0,0,0.18);
 }
 
-/* =========================
-   NEW: Force podcast list to a fixed visible height (~8 items) on desktop
-========================= */
-#podcastList.podcast-scroll{
-  height: var(--podListH);
-  flex: 0 0 auto; /* don't stretch */
+.podcast-list::-webkit-scrollbar { width: 10px; }
+.podcast-list::-webkit-scrollbar-track {
+  background: rgba(0,0,0,0.18);
+  border-left: 1px solid rgba(255,255,255,0.05);
+}
+.podcast-list::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.14);
+  border: 2px solid rgba(0,0,0,0.18);
+  border-radius: 999px;
+}
+.podcast-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,255,255,0.22);
 }
 
 .podcast-item {
@@ -507,29 +526,16 @@ main {
   overflow: hidden;
 }
 
-/* Keep link clickable, but allow controls */
-.podcast-link {
-  display: block;
-  padding: 0; /* controlled by grid */
-}
-
-/* Row wrapper so we can place 💭 on the right without breaking thumb sizing */
-.podcast-row {
-  position: relative;
-}
-
-/* ======= lock row size to the thumbnail ======= */
+/* Row sizing is controlled here */
 .podcast-link-grid {
   display: grid;
   grid-template-columns: var(--podThumb) 1fr auto; /* icon column */
   gap: 12px;
   align-items: center;
   padding: 12px;
-
   min-height: var(--podThumb);
 }
 
-/* Thumb is the sizing reference */
 .podcast-ep-thumb {
   width: var(--podThumb);
   height: var(--podThumb);
@@ -538,7 +544,6 @@ main {
   background: #000;
 }
 
-/* Lock meta height to thumbnail */
 .podcast-ep-meta {
   min-width: 0;
   height: var(--podThumb);
@@ -547,7 +552,6 @@ main {
   justify-content: center;
 }
 
-/* allow up to 2 lines but remain within thumb height */
 .podcast-item-title {
   font-weight: 750;
   font-size: 13.5px;
@@ -570,89 +574,52 @@ main {
 }
 
 /* =========================
-   Notes UI (💭 + editor)
+   ✅ EPISODE NOTES UI (MATCHES YOUR JS: epnote-*)
 ========================= */
 
-/* Icon button */
-.note-btn {
-  appearance: none;
-  border: 1px solid transparent;
-  background: transparent;
-  color: rgba(255,255,255,0.90);
+.epnote-bubble{
+  appearance:none;
+  border:1px solid rgba(255,255,255,0.10);
+  background: rgba(0,0,0,0.18);
+  color: rgba(255,255,255,0.92);
   border-radius: 999px;
   width: 34px;
   height: 34px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-
-  /* default: "empty" look */
-  opacity: var(--noteIconOpacityEmpty);
-  transition: opacity 0.12s ease-out, transform 0.08s ease-out, border-color 0.12s ease-out, background 0.12s ease-out;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  cursor:pointer;
+  transition: transform 0.08s ease-out, border-color 0.12s ease-out, background 0.12s ease-out, opacity 0.12s ease-out;
 }
 
-.note-btn:hover {
-  opacity: 0.95;
-  border-color: rgba(255,255,255,0.14);
-  background: rgba(0,0,0,0.18);
+.epnote-bubble:hover{
   transform: translateY(-1px);
+  border-color: rgba(255,255,255,0.14);
+  background: rgba(0,0,0,0.22);
+  opacity: 1 !important;
 }
 
-/* when notes exist */
-.note-btn.has-notes {
-  opacity: var(--noteIconOpacityFull);
+.epnote-status{
+  padding: 0 12px 10px;
+  font-size: 12px;
+  color: var(--muted2);
 }
 
-/* expanded editor container */
-.note-editor {
+.epnote-editor{
   border-top: 1px solid rgba(255,255,255,0.06);
   padding: 10px 12px 12px;
   background: rgba(0,0,0,0.14);
 }
 
-/* header row inside editor */
-.note-editor-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-
-.note-editor-title {
-  color: rgba(255,255,255,0.84);
-  font-size: 12px;
-  letter-spacing: 0.10em;
-  text-transform: uppercase;
-}
-
-.note-saved {
-  color: rgba(255,255,255,0.70);
-  font-size: 12px;
-  white-space: nowrap;
-  opacity: 0;
-  transition: opacity 0.14s ease-out;
-}
-
-.note-saved.is-visible { opacity: 1; }
-
-/* rows */
-.note-rows {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-/* each note row */
-.note-row {
+.epnote-row{
   display: grid;
-  grid-template-columns: 28px var(--noteTsW) 1fr 34px; /* 👇, timestamp, textarea, ✅ */
+  grid-template-columns: 28px var(--noteTsW) 1fr 34px;
   gap: 10px;
   align-items: start;
+  margin-top: 10px;
 }
 
-.note-add {
+.epnote-add{
   appearance: none;
   border: 1px solid rgba(255,255,255,0.10);
   background: rgba(0,0,0,0.18);
@@ -667,14 +634,13 @@ main {
   transition: transform 0.08s ease-out, border-color 0.12s ease-out, background 0.12s ease-out;
 }
 
-.note-add:hover {
+.epnote-add:hover{
   transform: translateY(-1px);
   border-color: rgba(255,255,255,0.14);
   background: rgba(0,0,0,0.22);
 }
 
-/* timestamp */
-.note-ts {
+.epnote-time{
   width: 100%;
   height: 34px;
   border-radius: 12px;
@@ -686,13 +652,12 @@ main {
   outline: none;
 }
 
-.note-ts:focus {
+.epnote-time:focus{
   border-color: rgba(29,185,84,0.45);
   box-shadow: 0 0 0 2px rgba(29,185,84,0.14);
 }
 
-/* textarea */
-.note-text {
+.epnote-text{
   width: 100%;
   min-height: var(--noteRowMinH);
   border-radius: 12px;
@@ -706,13 +671,12 @@ main {
   outline: none;
 }
 
-.note-text:focus {
+.epnote-text:focus{
   border-color: rgba(29,185,84,0.45);
   box-shadow: 0 0 0 2px rgba(29,185,84,0.14);
 }
 
-/* save button (emoji tick) */
-.note-save {
+.epnote-save{
   appearance: none;
   border: 1px solid rgba(255,255,255,0.10);
   background: rgba(0,0,0,0.18);
@@ -727,25 +691,10 @@ main {
   transition: transform 0.08s ease-out, border-color 0.12s ease-out, background 0.12s ease-out;
 }
 
-.note-save:hover {
+.epnote-save:hover{
   transform: translateY(-1px);
   border-color: rgba(255,255,255,0.14);
   background: rgba(0,0,0,0.22);
-}
-
-/* small helper line under editor (optional) */
-.note-help {
-  margin-top: 10px;
-  color: rgba(255,255,255,0.52);
-  font-size: 12px;
-}
-
-/* Force ~8 visible rows */
-#podcastList {
-  height: var(--podListH);
-  overflow: auto;
-  flex: 0 0 auto;
-  min-height: 0;
 }
 
 /* =========================
@@ -920,20 +869,18 @@ footer {
 
   /* On mobile: lock playlist + podcast lists to ~3 items visible */
   .cards-scroll { max-height: var(--mobileListMaxH); }
-  .podcast-scroll { max-height: var(--mobileListMaxH); }
 
-  /* NEW: stop forcing 8 rows on mobile */
-  #podcastList.podcast-scroll{
+  /* ✅ On mobile: DON'T force 8 rows */
+  .podcast-list{
     height: auto;
     max-height: var(--mobileListMaxH);
   }
 
   /* Note rows: give textarea more room */
-  .note-row {
+  .epnote-row {
     grid-template-columns: 28px 86px 1fr 34px;
   }
 
-  /* Avoid mobile “background seams” from viewport height quirks */
   body { min-height: 100%; }
 }
 
@@ -942,8 +889,7 @@ footer {
   .detail-head { grid-template-columns: 72px 1fr; }
   .detail-thumb { width: 72px; height: 72px; border-radius: 16px; }
 
-  /* Notes: stack a bit tighter on very small widths */
-  .note-row {
+  .epnote-row {
     grid-template-columns: 28px 80px 1fr 34px;
     gap: 8px;
   }
