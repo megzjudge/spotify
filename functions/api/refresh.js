@@ -82,14 +82,10 @@ export async function onRequestPost({ env, request }) {
     /***********************
      * YEAR SUMMARY DISCOVERY
      ***********************/
-    // NOTE: We do *not* hardcode Spotify editorial "wrapped" playlist IDs anymore,
-    // because some of them can open in the web player but 404 via Web API.
-
     function isYearSummaryPlaylist(p) {
       const name = String(p?.name || "").toLowerCase().trim();
       if (!name) return false;
 
-      // Strong signals first
       const strong = [
         "wrapped",
         "year in review",
@@ -100,8 +96,6 @@ export async function onRequestPost({ env, request }) {
       ];
       if (strong.some(k => name.includes(k))) return true;
 
-      // Year tokens: match "2020".."2030" in the name
-      // (kept tight so we don't accidentally match random numbers)
       const yearMatch = name.match(/\b(2020|2021|2022|2023|2024|2025|2026|2027|2028|2029|2030)\b/);
       if (yearMatch && (name.includes("top") || name.includes("wrapped") || name.includes("year"))) return true;
 
@@ -111,7 +105,6 @@ export async function onRequestPost({ env, request }) {
     const podcastPlaylist = normalized.find(p => p.id === PODCAST_PLAYLIST_ID) || null;
     const othersPlaylists = normalized.filter(p => OTHERS_PLAYLIST_IDS.includes(p.id));
 
-    // Candidates are anything not in podcast/others
     const candidates = normalized.filter(p =>
       p.id !== PODCAST_PLAYLIST_ID &&
       !OTHERS_PLAYLIST_IDS.includes(p.id)
@@ -121,7 +114,6 @@ export async function onRequestPost({ env, request }) {
       .filter(isYearSummaryPlaylist)
       .slice(0, 12);
 
-    // Normal playlists exclude year summary too (so they don’t clutter sections)
     const yearIds = new Set(yearSummaryPlaylists.map(p => p.id));
     const normal = candidates.filter(p => !yearIds.has(p.id));
 
@@ -136,10 +128,24 @@ export async function onRequestPost({ env, request }) {
     );
 
     /***********************
-     * METRICS
+     * METRICS (✅ server-side fix: de-dup songs across playlists)
      ***********************/
+    const seenSongKeys = new Set();
     let totalSongs = 0;
     let totalSongMs = 0;
+
+    function songKeyFromTrack(obj) {
+      // Prefer stable track id. Fallback for local/null ids.
+      const id = obj?.id ? String(obj.id) : "";
+      if (id) return `id:${id}`;
+
+      const name = String(obj?.name || "").trim().toLowerCase();
+      const artists = Array.isArray(obj?.artists) ? obj.artists.map(a => String(a?.name || "").trim().toLowerCase()).filter(Boolean).join("|") : "";
+      const ms = Number(obj?.duration_ms) || 0;
+
+      // This is not perfect, but prevents runaway inflation on local tracks.
+      return `local:${name}::${artists}::${ms}`;
+    }
 
     for (const p of normal) {
       const items = await fetchPlaylistItemsBounded(
@@ -155,11 +161,17 @@ export async function onRequestPost({ env, request }) {
         const ms = Number(obj.duration_ms);
         if (!Number.isFinite(ms)) continue;
 
+        const key = songKeyFromTrack(obj);
+        if (seenSongKeys.has(key)) continue;
+
+        seenSongKeys.add(key);
         totalSongs += 1;
         totalSongMs += ms;
       }
     }
 
+    // (Optional) de-dup podcast episodes too (keeps things sane if repeated)
+    const seenEpKeys = new Set();
     let podcastEpisodes = 0;
     let podcastMs = 0;
 
@@ -177,6 +189,11 @@ export async function onRequestPost({ env, request }) {
         const ms = Number(obj.duration_ms);
         if (!Number.isFinite(ms)) continue;
 
+        const id = obj?.id ? String(obj.id) : "";
+        const key = id ? `id:${id}` : `local:${String(obj?.name || "").trim().toLowerCase()}::${ms}`;
+        if (seenEpKeys.has(key)) continue;
+
+        seenEpKeys.add(key);
         podcastEpisodes += 1;
         podcastMs += ms;
       }
@@ -202,12 +219,12 @@ export async function onRequestPost({ env, request }) {
       podcastPlaylist
     };
 
-    // Optional debug (send { "debug": true } in POST body)
     if (body?.debug) {
       resp.debug = {
         fetchedPlaylists: playlistsRaw.length,
         filteredPlaylists: normalized.length,
-        yearSummaryMatched: yearSummaryPlaylists.map(p => ({ id: p.id, name: p.name }))
+        yearSummaryMatched: yearSummaryPlaylists.map(p => ({ id: p.id, name: p.name })),
+        uniqueSongKeys: seenSongKeys.size
       };
     }
 
@@ -325,6 +342,6 @@ function corsHeaders() {
   return {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type,Accept"
+    "Access-Control-Allow-Headers": "Content-Type,Accept,X-Auth"
   };
 }
