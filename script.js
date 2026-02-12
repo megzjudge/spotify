@@ -655,6 +655,8 @@
     wirePodcastInteractions(list);
   }
 
+  // ✅ FIXED: remove loading="lazy" (breaks in overflow scroll on iOS/Safari),
+  // add decoding + referrerpolicy for robustness.
   function renderPodcastItem(it) {
     const episodeId = String(it?.id || "").trim();
     const epImg = it.image || "https://spotify.jdge.cc/images/spotify_logo.png";
@@ -686,7 +688,13 @@
       <li class="podcast-item" data-episode-id="${escapeHtml(episodeId)}">
         <div class="podcast-link-grid">
           <a class="podcast-ep-left" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" aria-label="Open on Spotify">
-            <img class="podcast-ep-thumb" src="${escapeHtml(epImg)}" alt="" loading="lazy">
+            <img
+              class="podcast-ep-thumb"
+              src="${escapeHtml(epImg)}"
+              alt=""
+              decoding="async"
+              referrerpolicy="no-referrer"
+            >
           </a>
 
           <div class="podcast-ep-meta">
