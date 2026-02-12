@@ -23,6 +23,9 @@
   // We still fetch plenty; CSS limits the visible height.
   const PODCAST_COLUMN_LIMIT = 200;
 
+  // ✅ Notes auth (client-side) — stored per-session only.
+  const SS_NOTES_AUTH_KEY = "spotify_notes_auth";
+
   /***********************
    * DOM
    ***********************/
@@ -198,7 +201,7 @@
             <div class="podcast-empty" id="podcastEmpty"></div>
             <div class="podcast-error" id="podcastError" hidden></div>
 
-            <!-- ✅ UL is the scroll container (CSS locks to 8 visible rows on desktop) -->
+            <!-- ✅ UL is the scroll container -->
             <ul class="podcast-list" id="podcastList"></ul>
           </div>
         </aside>
@@ -248,7 +251,7 @@
     const owner = p.ownerLabel ? ` • ${p.ownerLabel}` : "";
     return `
       <div class="card" data-playlist-id="${escapeHtml(p.id)}">
-        <img class="thumb" src="${escapeHtml(img)}" alt="" loading="lazy">
+        <img class="thumb" src="${escapeHtml(img)}" alt="" loading="lazy" decoding="async">
         <div class="card-meta">
           <p class="card-title">${escapeHtml(p.name || "Untitled")}</p>
           <p class="card-sub">${escapeHtml(count)}${escapeHtml(owner)}</p>
@@ -497,7 +500,30 @@
     return entry;
   }
 
-  async function saveEpisodeNotes(episodeId, notes) {
+  function getNotesAuthToken() {
+    try { return sessionStorage.getItem(SS_NOTES_AUTH_KEY) || ""; } catch { return ""; }
+  }
+
+  function setNotesAuthToken(token) {
+    try {
+      if (!token) sessionStorage.removeItem(SS_NOTES_AUTH_KEY);
+      else sessionStorage.setItem(SS_NOTES_AUTH_KEY, token);
+    } catch {}
+  }
+
+  function ensureNotesAuthOrThrow() {
+    let token = getNotesAuthToken();
+    if (token) return token;
+
+    token = window.prompt("Enter notes password:");
+    token = String(token || "").trim();
+    if (!token) throw new Error("Save cancelled (missing password).");
+
+    setNotesAuthToken(token);
+    return token;
+  }
+
+  async function saveEpisodeNotes(episodeId, notes, authToken) {
     const entry = getEpisodeCacheEntry(episodeId);
     if (!entry) return;
 
@@ -520,7 +546,11 @@
 
     const res = await fetch(API_EPISODE_NOTE, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "X-Auth": String(authToken || "")
+      },
       body: JSON.stringify(payload)
     });
 
@@ -532,6 +562,10 @@
       const msg = (data && (data.error || data.message)) || text || `HTTP ${res.status}`;
       entry.saving = false;
       entry.error = msg;
+
+      // If auth failed, forget token so next click prompts again.
+      if (res.status === 401 || res.status === 403) setNotesAuthToken("");
+
       renderPodcastColumn();
       throw new Error(msg);
     }
@@ -653,10 +687,12 @@
 
     list.innerHTML = items.map(renderPodcastItem).join("");
     wirePodcastInteractions(list);
+
+    // ✅ Fix thumbnails reliably (no inline onerror / CSP-safe)
+    wirePodcastThumbFallbacks(list);
   }
 
-  // ✅ FIXED: remove loading="lazy" (breaks in overflow scroll on iOS/Safari),
-  // add decoding + referrerpolicy for robustness.
+  // ✅ Thumbnail hardening: remove inline onerror; JS-based fallback
   function renderPodcastItem(it) {
     const episodeId = String(it?.id || "").trim();
     const epImg = it.image || "https://spotify.jdge.cc/images/spotify_logo.png";
@@ -693,8 +729,11 @@
               src="${escapeHtml(epImg)}"
               alt=""
               decoding="async"
+              loading="eager"
               referrerpolicy="no-referrer"
-              onerror="this.onerror=null;this.src='https://spotify.jdge.cc/images/spotify_logo.png';"
+              data-epthumb="1"
+              data-epthumb-src="${escapeHtml(epImg)}"
+              srcset="${escapeHtml(epImg)} 1x"
             />
           </a>
 
@@ -717,6 +756,21 @@
         ${editorHtml}
       </li>
     `;
+  }
+
+  function wirePodcastThumbFallbacks(listEl) {
+    const FALLBACK = "https://spotify.jdge.cc/images/spotify_logo.png";
+    const imgs = listEl.querySelectorAll('img[data-epthumb="1"]');
+    imgs.forEach((img) => {
+      if (img.__fallbackBound) return;
+      img.__fallbackBound = true;
+
+      img.addEventListener("error", () => {
+        // If already fallback, stop
+        if (img.src && img.src.includes("spotify_logo.png")) return;
+        img.src = FALLBACK;
+      }, { passive: true });
+    });
   }
 
   function renderEpisodeNotesEditor(episodeId) {
@@ -876,10 +930,25 @@
     entry.error = null;
     entry.savedAt = null;
 
+    let authToken = "";
     try {
-      await saveEpisodeNotes(episodeId, rows);
+      authToken = ensureNotesAuthOrThrow();
+    } catch (err) {
+      entry.error = String(err?.message || err);
+      renderPodcastColumn();
+      return;
+    }
+
+    try {
+      await saveEpisodeNotes(episodeId, rows, authToken);
+
+      // ✅ UX: hide notes after save; only show again on bubble click
+      state.episodeNotes.openEpisodeId = null;
+      renderPodcastColumn();
     } catch (err) {
       console.error(err);
+      // keep editor open on error
+      renderPodcastColumn();
     }
   }
 
