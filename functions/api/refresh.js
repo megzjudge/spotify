@@ -24,20 +24,16 @@ export async function onRequestPost({ env, request }) {
       "37i9dQZF1EQnsJ0xmvpihE"
     ];
 
-    const YEAR_SUMMARY_PLAYLIST_IDS = [
-      "37i9dQZEVXcXHWVVT0lfDq"
-    ];
-
     const MAX_PLAYLISTS = clampInt(body?.maxPlaylists, 1, 200, 120);
     const MAX_TRACKS_PER_PLAYLIST = clampInt(body?.maxTracksPerPlaylist, 1, 500, 250);
 
     const NOT_PUBLIC_PREFIXES = ["NP:", "[Not Public]"];
     const NOT_PUBLIC_TAG = "#notpublic";
 
+    // Only hard-allowlist things you *know* work for your token
     const ALLOWLIST_IDS = new Set([
       PODCAST_PLAYLIST_ID,
-      ...OTHERS_PLAYLIST_IDS,
-      ...YEAR_SUMMARY_PLAYLIST_IDS
+      ...OTHERS_PLAYLIST_IDS
     ]);
 
     /***********************
@@ -49,13 +45,16 @@ export async function onRequestPost({ env, request }) {
 
     let playlistsRaw = await fetchMyPlaylists(accessToken, MAX_PLAYLISTS);
 
+    // Ensure allowlisted playlists are included even if not returned in /me/playlists
     const seen = new Set(playlistsRaw.map(p => p?.id).filter(Boolean));
     for (const id of ALLOWLIST_IDS) {
       if (!id || seen.has(id)) continue;
       try {
         const p = await fetchPlaylist(accessToken, id);
         playlistsRaw.push(p);
-      } catch {}
+      } catch {
+        // ignore
+      }
     }
 
     /***********************
@@ -65,6 +64,7 @@ export async function onRequestPost({ env, request }) {
       if (!p?.id) return false;
       if (ALLOWLIST_IDS.has(p.id)) return true;
 
+      // Keep only your public playlists (same as your current rules)
       if (p.owner?.id !== myUserId) return false;
       if (p.public === false) return false;
 
@@ -79,15 +79,51 @@ export async function onRequestPost({ env, request }) {
 
     const normalized = filtered.map(p => normalizePlaylistMeta(p, myUserId));
 
+    /***********************
+     * YEAR SUMMARY DISCOVERY
+     ***********************/
+    // NOTE: We do *not* hardcode Spotify editorial "wrapped" playlist IDs anymore,
+    // because some of them can open in the web player but 404 via Web API.
+
+    function isYearSummaryPlaylist(p) {
+      const name = String(p?.name || "").toLowerCase().trim();
+      if (!name) return false;
+
+      // Strong signals first
+      const strong = [
+        "wrapped",
+        "year in review",
+        "your top songs",
+        "your top artists",
+        "top songs ",
+        "top artists "
+      ];
+      if (strong.some(k => name.includes(k))) return true;
+
+      // Year tokens: match "2020".."2030" in the name
+      // (kept tight so we don't accidentally match random numbers)
+      const yearMatch = name.match(/\b(2020|2021|2022|2023|2024|2025|2026|2027|2028|2029|2030)\b/);
+      if (yearMatch && (name.includes("top") || name.includes("wrapped") || name.includes("year"))) return true;
+
+      return false;
+    }
+
     const podcastPlaylist = normalized.find(p => p.id === PODCAST_PLAYLIST_ID) || null;
     const othersPlaylists = normalized.filter(p => OTHERS_PLAYLIST_IDS.includes(p.id));
-    const yearSummaryPlaylists = normalized.filter(p => YEAR_SUMMARY_PLAYLIST_IDS.includes(p.id));
 
-    const normal = normalized.filter(p =>
+    // Candidates are anything not in podcast/others
+    const candidates = normalized.filter(p =>
       p.id !== PODCAST_PLAYLIST_ID &&
-      !OTHERS_PLAYLIST_IDS.includes(p.id) &&
-      !YEAR_SUMMARY_PLAYLIST_IDS.includes(p.id)
+      !OTHERS_PLAYLIST_IDS.includes(p.id)
     );
+
+    const yearSummaryPlaylists = candidates
+      .filter(isYearSummaryPlaylist)
+      .slice(0, 12);
+
+    // Normal playlists exclude year summary too (so they don’t clutter sections)
+    const yearIds = new Set(yearSummaryPlaylists.map(p => p.id));
+    const normal = candidates.filter(p => !yearIds.has(p.id));
 
     /***********************
      * SECTIONS
@@ -100,7 +136,7 @@ export async function onRequestPost({ env, request }) {
     );
 
     /***********************
-     * METRICS (FIXED)
+     * METRICS
      ***********************/
     let totalSongs = 0;
     let totalSongMs = 0;
@@ -149,7 +185,7 @@ export async function onRequestPost({ env, request }) {
     /***********************
      * RESPONSE
      ***********************/
-    return json({
+    const resp = {
       lastUpdated: new Date().toISOString(),
 
       totals: {
@@ -164,7 +200,18 @@ export async function onRequestPost({ env, request }) {
       othersPlaylists,
       yearSummaryPlaylists,
       podcastPlaylist
-    });
+    };
+
+    // Optional debug (send { "debug": true } in POST body)
+    if (body?.debug) {
+      resp.debug = {
+        fetchedPlaylists: playlistsRaw.length,
+        filteredPlaylists: normalized.length,
+        yearSummaryMatched: yearSummaryPlaylists.map(p => ({ id: p.id, name: p.name }))
+      };
+    }
+
+    return json(resp);
 
   } catch (err) {
     return json({
@@ -176,7 +223,7 @@ export async function onRequestPost({ env, request }) {
 }
 
 /* =========================
-   HELPERS (unchanged)
+   HELPERS
 ========================= */
 
 async function getUserAccessToken(env) {
@@ -192,7 +239,7 @@ async function getUserAccessToken(env) {
     })
   });
 
-  const data = await res.json();
+  const data = await res.json().catch(() => ({}));
   if (!res.ok || !data?.access_token) {
     throw new Error("Failed to refresh Spotify access token.");
   }
@@ -208,7 +255,7 @@ async function fetchMe(token) {
 }
 
 async function fetchPlaylist(token, id) {
-  const r = await fetch(`https://api.spotify.com/v1/playlists/${id}`, {
+  const r = await fetch(`https://api.spotify.com/v1/playlists/${encodeURIComponent(id)}`, {
     headers: { Authorization: `Bearer ${token}` }
   });
   if (!r.ok) throw new Error("Failed playlist fetch");
@@ -222,7 +269,7 @@ async function fetchMyPlaylists(token, limit) {
     const r = await fetch(next, {
       headers: { Authorization: `Bearer ${token}` }
     });
-    const d = await r.json();
+    const d = await r.json().catch(() => ({}));
     out.push(...(d.items || []));
     next = d.next;
   }
@@ -231,12 +278,12 @@ async function fetchMyPlaylists(token, limit) {
 
 async function fetchPlaylistItemsBounded(token, playlistId, max) {
   let out = [];
-  let next = `https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=100`;
+  let next = `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}/tracks?limit=100`;
   while (next && out.length < max) {
     const r = await fetch(next, {
       headers: { Authorization: `Bearer ${token}` }
     });
-    const d = await r.json();
+    const d = await r.json().catch(() => ({}));
     out.push(...(d.items || []));
     next = d.next;
   }
@@ -253,7 +300,9 @@ function normalizePlaylistMeta(p, myUserId) {
     url: p.external_urls?.spotify || null,
     totalTracks: p.tracks?.total ?? 0,
     ownerIsMe,
-    ownerLabel: ownerIsMe ? "by me" : (p.owner?.display_name ? `by ${p.owner.display_name}` : "by others")
+    ownerLabel: ownerIsMe
+      ? "by me"
+      : (p.owner?.display_name ? `by ${p.owner.display_name}` : "by others")
   };
 }
 
