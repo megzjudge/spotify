@@ -19,7 +19,7 @@
   // IMPORTANT: this only affects the fallback per-ID fetch in the browser.
   // Your /api/refresh is the primary source of truth for Year Summary.
   const YEAR_SUMMARY_PLAYLIST_IDS = [
-    "37i9dQZEVXd4WLIGflDMQQ"
+    "37i9dQZEVXcXHWVVT0lfDq"
   ];
 
   // We still fetch plenty; CSS limits the visible height.
