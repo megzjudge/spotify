@@ -7,6 +7,26 @@ export async function onRequestOptions() {
 export async function onRequestGet({ env, request }) {
   try {
     const url = new URL(request.url);
+
+    // ✅ NEW: summary mode (single file read, returns which episodes have non-empty notes)
+    const summary = String(url.searchParams.get("summary") || "").trim() === "1";
+    if (summary) {
+      const cfg = getGithubConfig(env);
+      const file = await githubReadJson(cfg, { allowMissing: true });
+      const all = (file.data && typeof file.data === "object") ? file.data : {};
+
+      const episodesWithNotes = [];
+      for (const [episodeId, rows] of Object.entries(all)) {
+        if (!episodeId) continue;
+        if (!Array.isArray(rows) || !rows.length) continue;
+
+        const hasText = rows.some((r) => String(r?.text || "").trim().length > 0);
+        if (hasText) episodesWithNotes.push(String(episodeId));
+      }
+
+      return json({ ok: true, episodesWithNotes }, 200);
+    }
+
     const episodeId = String(url.searchParams.get("episodeId") || "").trim();
     if (!episodeId) return json({ ok: false, error: "Missing episodeId" }, 400);
 
@@ -38,7 +58,6 @@ export async function onRequestGet({ env, request }) {
 export async function onRequestPost({ env, request }) {
   try {
     // ✅ AUTH: require X-Auth header to match env.AUTH
-    // This is enforced only for writes (POST), per your requirement.
     enforceAuth(env, request);
 
     const body = await request.json().catch(() => ({}));
@@ -77,7 +96,6 @@ export async function onRequestPost({ env, request }) {
     }, 200);
 
   } catch (err) {
-    // If enforceAuth threw a structured error, prefer its status
     const status = Number(err?.status) || 500;
 
     return json({
@@ -283,3 +301,9 @@ function json(obj, status = 200) {
 }
 
 function corsHeaders() {
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type,Accept,X-Auth"
+  };
+}
