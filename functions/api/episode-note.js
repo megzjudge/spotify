@@ -1,13 +1,4 @@
 // functions/api/episode-note.js
-//
-// GET  /api/episode-note?episodeId=xxx
-// POST /api/episode-note { episodeId, notes:[{timestamp,text}] }
-//
-// Stores notes in a JSON file in GitHub (Contents API).
-// File format (top-level map):
-// {
-//   "<episodeId>": [ { "timestamp":"00:00:00", "text":"..." }, ... ]
-// }
 
 export async function onRequestOptions() {
   return new Response(null, { status: 204, headers: corsHeaders() });
@@ -46,6 +37,10 @@ export async function onRequestGet({ env, request }) {
 
 export async function onRequestPost({ env, request }) {
   try {
+    // ✅ AUTH: require X-Auth header to match env.AUTH
+    // This is enforced only for writes (POST), per your requirement.
+    enforceAuth(env, request);
+
     const body = await request.json().catch(() => ({}));
     const episodeId = String(body.episodeId || "").trim();
     if (!episodeId) return json({ ok: false, error: "Missing episodeId" }, 400);
@@ -82,13 +77,44 @@ export async function onRequestPost({ env, request }) {
     }, 200);
 
   } catch (err) {
+    // If enforceAuth threw a structured error, prefer its status
+    const status = Number(err?.status) || 500;
+
     return json({
       ok: false,
-      error: "Episode note write failed",
+      error: status === 401 || status === 403 ? "Unauthorized" : "Episode note write failed",
       message: String(err?.message || err),
       details: err?.details || null,
       stack: String(err?.stack || "")
-    }, 500);
+    }, status);
+  }
+}
+
+/* =========================
+   AUTH (POST-only)
+========================= */
+
+function enforceAuth(env, request) {
+  const expected = String(env.AUTH || "").trim();
+  if (!expected) {
+    const e = new Error("Server missing AUTH secret.");
+    e.status = 500;
+    e.details = { missing: ["AUTH"] };
+    throw e;
+  }
+
+  const provided = String(request.headers.get("X-Auth") || "").trim();
+
+  if (!provided) {
+    const e = new Error("Missing X-Auth header.");
+    e.status = 401;
+    throw e;
+  }
+
+  if (provided !== expected) {
+    const e = new Error("Invalid auth token.");
+    e.status = 403;
+    throw e;
   }
 }
 
@@ -257,9 +283,3 @@ function json(obj, status = 200) {
 }
 
 function corsHeaders() {
-  return {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type,Accept"
-  };
-}
