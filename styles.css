@@ -1,11 +1,3 @@
-/* =========================
-   Spotify Dark UI v2 (with fixed footer + scroll panels)
-   + continuous background
-   + styled scrollbars
-   + podcast list locked to 8 visible rows (desktop)
-   + epnote UI (💭 + inline editor)
-   ========================= */
-
 :root {
   --spotify-green: #1db954;
 
