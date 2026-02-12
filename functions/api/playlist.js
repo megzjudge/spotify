@@ -72,9 +72,7 @@ async function getUserAccessToken(env) {
 
   const text = await res.text();
   let data = {};
-  try {
-    data = text ? JSON.parse(text) : {};
-  } catch {}
+  try { data = text ? JSON.parse(text) : {}; } catch {}
 
   if (!res.ok || !data?.access_token) {
     const e = new Error(`Failed to refresh access token (${res.status})`);
@@ -96,9 +94,7 @@ async function fetchJsonOrThrow(url, token, label) {
 
   const text = await res.text();
   let data = null;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {}
+  try { data = text ? JSON.parse(text) : null; } catch {}
 
   if (!res.ok) {
     const e = new Error(`${label} failed (${res.status})`);
@@ -115,16 +111,12 @@ async function fetchMe(token) {
 }
 
 async function fetchPlaylist(token, playlistId) {
-  return fetchJsonOrThrow(
-    `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}`,
-    token,
-    "playlist meta"
-  );
+  return fetchJsonOrThrow(`https://api.spotify.com/v1/playlists/${playlistId}`, token, "playlist meta");
 }
 
 async function fetchPlaylistItemsBounded(token, playlistId, maxItems) {
   let items = [];
-  let next = `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}/tracks?limit=100`;
+  let next = `https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=100`;
 
   while (next && items.length < maxItems) {
     const data = await fetchJsonOrThrow(next, token, "playlist items");
@@ -138,6 +130,13 @@ async function fetchPlaylistItemsBounded(token, playlistId, maxItems) {
 /* =========================
    NORMALIZATION
 ========================= */
+
+function pickFirstImageUrl(images) {
+  if (!Array.isArray(images) || !images.length) return null;
+  // Spotify usually returns [{url,height,width},...]
+  return images?.[0]?.url || null;
+}
+
 function normalizePlaylist(p, myUserId) {
   const ownerId = p.owner?.id || null;
   const ownerIsMe = myUserId ? ownerId === myUserId : false;
@@ -147,7 +146,7 @@ function normalizePlaylist(p, myUserId) {
   return {
     id: p.id,
     name: p.name,
-    image: p.images?.[0]?.url || null,
+    image: pickFirstImageUrl(p.images) || null,
     url: p.external_urls?.spotify || null,
     totalTracks: p.tracks?.total ?? null,
     ownerIsMe,
@@ -155,6 +154,7 @@ function normalizePlaylist(p, myUserId) {
   };
 }
 
+// playlist items return { added_at, track: {...} } even for episodes (track.type === "episode")
 function normalizeItem(it) {
   const obj = it?.track;
   if (!obj) return null;
@@ -168,15 +168,21 @@ function normalizeItem(it) {
       type: "track",
       id: obj.id,
       name: obj.name,
-      artists: (obj.artists || []).map((a) => a.name).filter(Boolean),
+      artists: (obj.artists || []).map(a => a.name).filter(Boolean),
       url,
       durationMs,
       addedAt: it.added_at || null,
-      image: obj.album?.images?.[0]?.url || null
+      image: pickFirstImageUrl(obj.album?.images) || null
     };
   }
 
   if (type === "episode") {
+    // ✅ FIX: episode artwork can be in obj.images OR obj.show.images depending on endpoint/fields
+    const episodeImage =
+      pickFirstImageUrl(obj.images) ||
+      pickFirstImageUrl(obj.show?.images) ||
+      null;
+
     return {
       type: "episode",
       id: obj.id,
@@ -185,7 +191,7 @@ function normalizeItem(it) {
       url,
       durationMs,
       addedAt: it.added_at || null,
-      image: obj.images?.[0]?.url || null
+      image: episodeImage
     };
   }
 
