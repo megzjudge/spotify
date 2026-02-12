@@ -1,4 +1,5 @@
 // functions/api/playlist.js
+
 export async function onRequestOptions() {
   return new Response(null, {
     status: 204,
@@ -17,6 +18,8 @@ export async function onRequestPost({ env, request }) {
     }
 
     const token = await getUserAccessToken(env);
+
+    // Fetch /me (to label owners)
     const me = await fetchMe(token);
     const myUserId = me?.id || null;
 
@@ -28,18 +31,15 @@ export async function onRequestPost({ env, request }) {
     const items = limit === 0 ? [] : await fetchPlaylistItemsBounded(token, playlistId, limit);
     const normalizedItems = items.map(normalizeItem).filter(Boolean);
 
-    return json(
-      {
-        playlist,
-        items: normalizedItems
-      },
-      200
-    );
+    return json({ playlist, items: normalizedItems }, 200);
   } catch (err) {
+    // err may contain extra fields; include them.
     return json(
       {
         error: "Playlist fetch failed",
         message: String(err?.message || err),
+        status: err?.status || null,
+        details: err?.details || null,
         stack: String(err?.stack || "")
       },
       500
@@ -71,31 +71,48 @@ async function getUserAccessToken(env) {
     })
   });
 
-  const data = await res.json().catch(() => ({}));
+  const text = await res.text();
+  let data = {};
+  try { data = text ? JSON.parse(text) : {}; } catch {}
+
   if (!res.ok || !data?.access_token) {
-    throw new Error(`Failed to refresh access token (${res.status})`);
+    const e = new Error(`Failed to refresh access token (${res.status})`);
+    e.status = res.status;
+    e.details = { endpoint: "token", body: data || text };
+    throw e;
   }
 
   return data.access_token;
 }
 
 /* =========================
-   SPOTIFY API
+   SPOTIFY API (with rich errors)
 ========================= */
-async function fetchMe(token) {
-  const res = await fetch("https://api.spotify.com/v1/me", {
+async function fetchJsonOrThrow(url, token, label) {
+  const res = await fetch(url, {
     headers: { Authorization: `Bearer ${token}` }
   });
-  if (!res.ok) throw new Error(`Failed to fetch /me (${res.status})`);
-  return res.json();
+
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch {}
+
+  if (!res.ok) {
+    const e = new Error(`${label} failed (${res.status})`);
+    e.status = res.status;
+    e.details = { endpoint: url, body: data || text };
+    throw e;
+  }
+
+  return data;
+}
+
+async function fetchMe(token) {
+  return fetchJsonOrThrow("https://api.spotify.com/v1/me", token, "/me");
 }
 
 async function fetchPlaylist(token, playlistId) {
-  const res = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}`, {
-    headers: { Authorization: `Bearer ${token}` }
-  });
-  if (!res.ok) throw new Error(`Failed to fetch playlist (${res.status})`);
-  return res.json();
+  return fetchJsonOrThrow(`https://api.spotify.com/v1/playlists/${playlistId}`, token, "playlist meta");
 }
 
 async function fetchPlaylistItemsBounded(token, playlistId, maxItems) {
@@ -103,11 +120,7 @@ async function fetchPlaylistItemsBounded(token, playlistId, maxItems) {
   let next = `https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=100`;
 
   while (next && items.length < maxItems) {
-    const res = await fetch(next, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    if (!res.ok) throw new Error(`Failed to fetch playlist items (${res.status})`);
-    const data = await res.json();
+    const data = await fetchJsonOrThrow(next, token, "playlist items");
     items = items.concat(data.items || []);
     next = data.next;
   }
@@ -122,12 +135,7 @@ function normalizePlaylist(p, myUserId) {
   const ownerId = p.owner?.id || null;
   const ownerIsMe = myUserId ? ownerId === myUserId : false;
 
-  let ownerLabel = "";
-  if (p.owner?.display_name) {
-    ownerLabel = ownerIsMe ? "by me" : "by others";
-  } else {
-    ownerLabel = ownerIsMe ? "by me" : "by others";
-  }
+  const ownerLabel = ownerIsMe ? "by me" : "by others";
 
   return {
     id: p.id,
@@ -158,7 +166,6 @@ function normalizeItem(it) {
       url,
       durationMs,
       addedAt: it.added_at || null,
-
       image: obj.album?.images?.[0]?.url || null
     };
   }
@@ -172,7 +179,6 @@ function normalizeItem(it) {
       url,
       durationMs,
       addedAt: it.added_at || null,
-
       image: obj.images?.[0]?.url || null
     };
   }
