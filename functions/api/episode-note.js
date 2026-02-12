@@ -12,13 +12,27 @@ export async function onRequestGet({ env, request }) {
 
     const path = env.GITHUB_NOTES_PATH || "episode-notes.json";
     const { data } = await readJsonFileFromGitHub(env, path);
-    const all = data && typeof data === "object" ? data : {};
-    const notes = Array.isArray(all[episodeId]) ? all[episodeId] : [];
+
+    const all = (data && typeof data === "object") ? data : {};
+    const rawArr = Array.isArray(all[episodeId]) ? all[episodeId] : [];
+
+    // Always return {timestamp,text} to match script.js expectations
+    const notes = rawArr
+      .map((row) => {
+        const timestamp = normalizeTimestamp(row?.timestamp ?? row?.t ?? "");
+        const text = String(row?.text ?? row?.n ?? "").slice(0, 5000);
+        return { timestamp, text };
+      })
+      .filter((r) => r.timestamp || r.text);
 
     return json({ episodeId, notes }, 200);
   } catch (err) {
     return json(
-      { error: "Episode note read failed", message: String(err?.message || err), stack: String(err?.stack || "") },
+      {
+        error: "Episode note read failed",
+        message: String(err?.message || err),
+        stack: String(err?.stack || "")
+      },
       500
     );
   }
@@ -31,10 +45,9 @@ export async function onRequestPost({ env, request }) {
     const episodeId = String(body.episodeId || "").trim();
     if (!episodeId) return json({ error: "Missing episodeId" }, 400);
 
-    // If body.notes present: replace array for that episodeId (best for your UI save button)
     const replaceNotes = Array.isArray(body.notes) ? body.notes : null;
 
-    // If body.t/body.n present: append a single row
+    // Optional append mode (not used by your UI, but keep it)
     const t = body.t != null ? String(body.t).trim() : "";
     const n = body.n != null ? String(body.n).trim() : "";
     const wantsAppend = !replaceNotes && (t || n);
@@ -42,31 +55,30 @@ export async function onRequestPost({ env, request }) {
     const path = env.GITHUB_NOTES_PATH || "episode-notes.json";
     const { data: existing, sha } = await readJsonFileFromGitHub(env, path);
 
-    const all = existing && typeof existing === "object" ? existing : {};
+    const all = (existing && typeof existing === "object") ? existing : {};
     const current = Array.isArray(all[episodeId]) ? all[episodeId] : [];
 
     let next = current;
 
     if (replaceNotes) {
-      // sanitize + clamp
+      // Accept BOTH shapes:
+      // - script.js: {timestamp,text}
+      // - legacy:    {t,n}
       next = replaceNotes
-        .map((row) => ({
-          t: normalizeTimestamp(row?.t),
-          n: String(row?.n ?? "").slice(0, 5000),
-          ts: row?.ts ? String(row.ts) : new Date().toISOString()
-        }))
-        .filter((row) => row.t || row.n)
+        .map((row) => {
+          const timestamp = normalizeTimestamp(row?.timestamp ?? row?.t ?? "");
+          const text = String(row?.text ?? row?.n ?? "").trim().slice(0, 5000);
+          return { timestamp, text };
+        })
+        .filter((r) => r.timestamp || r.text)
         .slice(0, 500);
+
+      // Ensure at least one row (your UI expects something)
+      if (!next.length) next = [{ timestamp: "00:00:00", text: "" }];
     } else if (wantsAppend) {
-      next = current
-        .concat([
-          {
-            t: normalizeTimestamp(t) || "00:00:00",
-            n: String(n).slice(0, 5000),
-            ts: new Date().toISOString()
-          }
-        ])
-        .slice(0, 500);
+      const timestamp = normalizeTimestamp(t) || "00:00:00";
+      const text = String(n).trim().slice(0, 5000);
+      next = current.concat([{ timestamp, text }]).slice(0, 500);
     } else {
       return json({ error: "Provide either {notes:[...]} or {t,n} to append." }, 400);
     }
@@ -81,16 +93,17 @@ export async function onRequestPost({ env, request }) {
         ok: true,
         episodeId,
         notes: next,
-        commit: {
-          sha: res?.commit?.sha || null,
-          url: res?.commit?.html_url || null
-        }
+        commit: { sha: res?.commit?.sha || null, url: res?.commit?.html_url || null }
       },
       200
     );
   } catch (err) {
     return json(
-      { error: "Episode note write failed", message: String(err?.message || err), stack: String(err?.stack || "") },
+      {
+        error: "Episode note write failed",
+        message: String(err?.message || err),
+        stack: String(err?.stack || "")
+      },
       500
     );
   }
@@ -109,7 +122,7 @@ export async function onRequestDelete({ env, request }) {
     const path = env.GITHUB_NOTES_PATH || "episode-notes.json";
     const { data: existing, sha } = await readJsonFileFromGitHub(env, path);
 
-    const all = existing && typeof existing === "object" ? existing : {};
+    const all = (existing && typeof existing === "object") ? existing : {};
     const current = Array.isArray(all[episodeId]) ? all[episodeId] : [];
 
     if (!current.length) return json({ ok: true, episodeId, notes: [] }, 200);
@@ -132,7 +145,11 @@ export async function onRequestDelete({ env, request }) {
     );
   } catch (err) {
     return json(
-      { error: "Episode note delete failed", message: String(err?.message || err), stack: String(err?.stack || "") },
+      {
+        error: "Episode note delete failed",
+        message: String(err?.message || err),
+        stack: String(err?.stack || "")
+      },
       500
     );
   }
@@ -153,12 +170,9 @@ function requireGitHubEnv(env) {
   return { token, owner, repo, branch };
 }
 
-// Preserve slashes, encode each path segment safely for GitHub Contents API.
+// Preserve slashes; encode each segment only.
 function ghPath(p) {
-  return String(p || "")
-    .split("/")
-    .map(encodeURIComponent)
-    .join("/");
+  return String(p || "").split("/").map(encodeURIComponent).join("/");
 }
 
 async function readJsonFileFromGitHub(env, path) {
@@ -173,10 +187,7 @@ async function readJsonFileFromGitHub(env, path) {
     }
   });
 
-  // If file doesn't exist yet, return empty object without sha
-  if (res.status === 404) {
-    return { data: {}, sha: null };
-  }
+  if (res.status === 404) return { data: {}, sha: null };
 
   const payload = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -221,8 +232,10 @@ async function writeJsonFileToGitHub(env, path, obj, sha, message) {
 
   const payload = await res.json().catch(() => ({}));
   if (!res.ok) {
+    // This message is what you need to see in the browser console
     throw new Error(`GitHub write failed (${res.status}). ${payload?.message || ""}`);
   }
+
   return payload;
 }
 
@@ -231,25 +244,27 @@ async function writeJsonFileToGitHub(env, path, obj, sha, message) {
 ========================= */
 
 function normalizeTimestamp(s) {
+  // Accept "SS", "MM:SS", "HH:MM:SS" -> return "HH:MM:SS"
   const raw = String(s || "").trim();
-  if (!raw) return "";
+  if (!raw) return "00:00:00";
 
-  // allow "MM:SS" or "HH:MM:SS"
-  const parts = raw.split(":").map((x) => x.trim());
-  if (parts.length === 2) {
-    const mm = clampInt(parts[0], 0, 9999, 0);
-    const ss = clampInt(parts[1], 0, 59, 0);
-    return `${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+  const parts = raw.split(":").map((x) => x.trim()).filter(Boolean);
+  if (parts.length === 1) {
+    const ss = clampInt(parts[0], 0, 59, 0);
+    return `00:00:${String(ss).padStart(2, "0")}`;
   }
-  if (parts.length === 3) {
-    const hh = clampInt(parts[0], 0, 9999, 0);
+  if (parts.length === 2) {
+    const mm = clampInt(parts[0], 0, 999, 0);
+    const ss = clampInt(parts[1], 0, 59, 0);
+    return `00:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+  }
+  if (parts.length >= 3) {
+    const hh = clampInt(parts[0], 0, 999, 0);
     const mm = clampInt(parts[1], 0, 59, 0);
     const ss = clampInt(parts[2], 0, 59, 0);
     return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
   }
-
-  // if weird, just return trimmed raw (UI can still display)
-  return raw.slice(0, 32);
+  return "00:00:00";
 }
 
 function clampInt(v, min, max, fallback) {
@@ -277,7 +292,6 @@ function corsHeaders() {
 }
 
 function b64ToUtf8(b64) {
-  // GitHub content may include newlines; strip them
   const clean = String(b64 || "").replace(/\n/g, "");
   const bin = atob(clean);
   const bytes = new Uint8Array(bin.length);
