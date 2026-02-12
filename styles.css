@@ -528,6 +528,16 @@ main {
   min-height: var(--podRowMinH);
 }
 
+/* ✅ HARDEN: ensure the anchor itself is a fixed square + clips correctly */
+.podcast-ep-left{
+  display: block;
+  width: var(--podThumb);
+  height: var(--podThumb);
+  border-radius: var(--podRadius);
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+
 .podcast-ep-thumb {
   width: var(--podThumb);
   height: var(--podThumb);
