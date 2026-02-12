@@ -36,17 +36,30 @@
   --noteTsW: 100px; /* timestamp width */
 
   /* Podcast visible rows */
-  --podVisibleRows: 8;
+  --podVisibleRows: 9; /* ✅ was 8 */
   --podRowPadY: 12px;
   --podRowMinH: calc(var(--podThumb) + (var(--podRowPadY) * 2)); /* cannot collapse */
   --podGap: 10px;
   --podListPad: 12px;
 
-  /* list height = 8 rows + 7 gaps + padding top/bottom */
+  /* list height = 9 rows + 8 gaps + padding top/bottom */
   --podListH: calc(
     (var(--podVisibleRows) * var(--podRowMinH)) +
     ((var(--podVisibleRows) - 1) * var(--podGap)) +
     (var(--podListPad) * 2)
+  );
+
+  /* ✅ Playlists visible rows (desktop) */
+  --plVisibleRows: 9;
+  --plThumb: 56px;
+  --plRowPadY: 10px;     /* matches .card padding */
+  --plRowMinH: calc(var(--plThumb) + (var(--plRowPadY) * 2));
+  --plGap: 10px;         /* matches .cards gap */
+  --plListPad: 12px;     /* matches .cards padding */
+  --plListH: calc(
+    (var(--plVisibleRows) * var(--plRowMinH)) +
+    ((var(--plVisibleRows) - 1) * var(--plGap)) +
+    (var(--plListPad) * 2)
   );
 }
 
@@ -350,6 +363,9 @@ main {
 
   scrollbar-width: thin;
   scrollbar-color: rgba(255,255,255,0.18) rgba(0,0,0,0.18);
+
+  /* ✅ Desktop: lock visible playlist rows to 9 */
+  height: var(--plListH);
 }
 
 .cards-scroll::-webkit-scrollbar { width: 10px; }
@@ -495,18 +511,15 @@ main {
   overflow: hidden;
 }
 
-/* =========================
-   ✅ FIX: prevent <li> collapsing to 2px in flex column (your observed bug)
-   This matches the working console override you tested.
-========================= */
+/* ✅ FIX: prevent <li> collapsing to 2px in flex column */
 .podcast-item{
-  display: block;               /* was list-item; block fixes collapse */
-  flex: 0 0 auto;               /* don't shrink in flex layouts */
-  min-height: var(--podRowMinH);/* guarantees row never collapses */
+  display: block;
+  flex: 0 0 auto;
+  min-height: var(--podRowMinH);
 }
 
 .podcast-link-grid{
-  width: 100%;                  /* ensure grid spans full row */
+  width: 100%;
 }
 
 /* ✅ ROW: cannot collapse */
@@ -566,7 +579,7 @@ main {
   text-overflow: ellipsis;
 }
 
-/* ✅ NOTES button (matches your JS: .epnote-bubble) */
+/* ✅ NOTES button */
 .epnote-bubble {
   appearance: none;
   border: 1px solid rgba(255,255,255,0.10);
@@ -588,7 +601,7 @@ main {
   background: rgba(0,0,0,0.22);
 }
 
-/* Editor + rows (matches your JS: .epnote-*) */
+/* Editor + rows */
 .epnote-status {
   padding: 0 12px 10px;
   color: rgba(255,255,255,0.70);
@@ -857,10 +870,16 @@ footer {
   .primary-button { width: 100%; min-width: 0; }
   .container-header { flex-direction: column; align-items: stretch; }
 
-  /* On mobile: don't force 8 rows; use a smaller max-height */
+  /* On mobile: don't force 9 rows; use a smaller max-height */
   #podcastList {
     height: auto;
     max-height: var(--mobileListMaxH);
+  }
+
+  /* ✅ On mobile: playlists scroll area should not lock to desktop 9-row height */
+  .cards-scroll{
+    height: auto;
+    max-height: calc(var(--mobileListMaxH) + 120px);
   }
 
   .epnote-row {
