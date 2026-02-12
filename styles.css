@@ -503,6 +503,20 @@ main {
   overflow: hidden;
 }
 
+/* =========================
+   ✅ FIX: prevent <li> collapsing to 2px in flex column (your observed bug)
+   This matches the working console override you tested.
+========================= */
+.podcast-item{
+  display: block;               /* was list-item; block fixes collapse */
+  flex: 0 0 auto;               /* don't shrink in flex layouts */
+  min-height: var(--podRowMinH);/* guarantees row never collapses */
+}
+
+.podcast-link-grid{
+  width: 100%;                  /* ensure grid spans full row */
+}
+
 /* ✅ ROW: cannot collapse */
 .podcast-link-grid {
   display: grid;
