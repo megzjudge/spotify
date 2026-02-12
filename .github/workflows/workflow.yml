@@ -1,0 +1,20 @@
+name: On Content Update
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "data/**"
+
+jobs:
+  run-on-update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show changed content
+        run: |
+          echo "Content updated"
+          git log -1 --stat
