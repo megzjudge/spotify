@@ -1,9 +1,14 @@
 // functions/api/github-test.js
+export async function onRequestOptions() {
+  return new Response(null, { status: 204, headers: corsHeaders() });
+}
 
-export async function onRequestGet({ env, request }) {
+export async function onRequestGet({ env }) {
   try {
-    const path = env.GITHUB_TEST_PATH || "data/github-test.json";
     const { token, owner, repo, branch } = requireGitHubEnv(env);
+
+    // IMPORTANT: test the SAME file episode-note uses
+    const path = env.GITHUB_NOTES_PATH || "episode-notes.json";
 
     const read = await ghReadJson({ token, owner, repo, branch, path });
 
@@ -11,7 +16,8 @@ export async function onRequestGet({ env, request }) {
     const nextObj = {
       ok: true,
       touchedAt: now,
-      prev: read.data && typeof read.data === "object" ? read.data : null
+      // keep it small
+      prevKeys: read.data && typeof read.data === "object" ? Object.keys(read.data).slice(0, 20) : []
     };
 
     const write = await ghWriteJson({
@@ -31,12 +37,14 @@ export async function onRequestGet({ env, request }) {
         url: write?.commit?.html_url || null
       }
     }, 200);
+
   } catch (err) {
     return json({
       ok: false,
       error: String(err?.message || err),
-      status: err?.status || null,
-      details: err?.details || null
+      status: err?.status || 500,
+      details: err?.details || null,
+      stack: String(err?.stack || "")
     }, 500);
   }
 }
@@ -55,7 +63,8 @@ function requireGitHubEnv(env) {
 }
 
 function ghPath(p) {
-  return String(p || "").split("/").map(encodeURIComponent).join("/");
+  // encode each segment, keep slashes
+  return String(p || "").replace(/^\/+/, "").split("/").map(encodeURIComponent).join("/");
 }
 
 async function ghReadJson({ token, owner, repo, branch, path }) {
@@ -68,11 +77,11 @@ async function ghReadJson({ token, owner, repo, branch, path }) {
     }
   });
 
-  if (res.status === 404) return { data: {}, sha: null };
-
   const text = await res.text();
   let payload = null;
   try { payload = text ? JSON.parse(text) : null; } catch {}
+
+  if (res.status === 404) return { data: {}, sha: null };
 
   if (!res.ok) {
     const e = new Error(`GitHub read failed (${res.status}). ${(payload && payload.message) ? payload.message : text}`);
@@ -142,6 +151,14 @@ function utf8ToB64(str) {
 function json(obj, status = 200) {
   return new Response(JSON.stringify(obj, null, 2), {
     status,
-    headers: { "content-type": "application/json; charset=utf-8" }
+    headers: { ...corsHeaders(), "content-type": "application/json; charset=utf-8" }
   });
+}
+
+function corsHeaders() {
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type,Accept"
+  };
 }
