@@ -18,9 +18,7 @@
 
   // IMPORTANT: this only affects the fallback per-ID fetch in the browser.
   // Your /api/refresh is the primary source of truth for Year Summary.
-  const YEAR_SUMMARY_PLAYLIST_IDS = [
-    "37i9dQZEVXcXHWVVT0lfDq"
-  ];
+  const YEAR_SUMMARY_PLAYLIST_IDS = [];
 
   // We still fetch plenty; CSS limits the visible height.
   const PODCAST_COLUMN_LIMIT = 200;
