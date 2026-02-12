@@ -1,3 +1,5 @@
+// functions/api/episode-note.js
+
 export async function onRequestOptions() {
   return new Response(null, { status: 204, headers: corsHeaders() });
 }
@@ -10,7 +12,7 @@ export async function onRequestGet({ env, request }) {
 
     const path = env.GITHUB_NOTES_PATH || "episode-notes.json";
     const { data } = await readJsonFileFromGitHub(env, path);
-    const all = (data && typeof data === "object") ? data : {};
+    const all = data && typeof data === "object" ? data : {};
     const notes = Array.isArray(all[episodeId]) ? all[episodeId] : [];
 
     return json({ episodeId, notes }, 200);
@@ -40,7 +42,7 @@ export async function onRequestPost({ env, request }) {
     const path = env.GITHUB_NOTES_PATH || "episode-notes.json";
     const { data: existing, sha } = await readJsonFileFromGitHub(env, path);
 
-    const all = (existing && typeof existing === "object") ? existing : {};
+    const all = existing && typeof existing === "object" ? existing : {};
     const current = Array.isArray(all[episodeId]) ? all[episodeId] : [];
 
     let next = current;
@@ -56,13 +58,15 @@ export async function onRequestPost({ env, request }) {
         .filter((row) => row.t || row.n)
         .slice(0, 500);
     } else if (wantsAppend) {
-      next = current.concat([
-        {
-          t: normalizeTimestamp(t) || "00:00:00",
-          n: String(n).slice(0, 5000),
-          ts: new Date().toISOString()
-        }
-      ]).slice(0, 500);
+      next = current
+        .concat([
+          {
+            t: normalizeTimestamp(t) || "00:00:00",
+            n: String(n).slice(0, 5000),
+            ts: new Date().toISOString()
+          }
+        ])
+        .slice(0, 500);
     } else {
       return json({ error: "Provide either {notes:[...]} or {t,n} to append." }, 400);
     }
@@ -105,7 +109,7 @@ export async function onRequestDelete({ env, request }) {
     const path = env.GITHUB_NOTES_PATH || "episode-notes.json";
     const { data: existing, sha } = await readJsonFileFromGitHub(env, path);
 
-    const all = (existing && typeof existing === "object") ? existing : {};
+    const all = existing && typeof existing === "object" ? existing : {};
     const current = Array.isArray(all[episodeId]) ? all[episodeId] : [];
 
     if (!current.length) return json({ ok: true, episodeId, notes: [] }, 200);
@@ -149,10 +153,18 @@ function requireGitHubEnv(env) {
   return { token, owner, repo, branch };
 }
 
+// Preserve slashes, encode each path segment safely for GitHub Contents API.
+function ghPath(p) {
+  return String(p || "")
+    .split("/")
+    .map(encodeURIComponent)
+    .join("/");
+}
+
 async function readJsonFileFromGitHub(env, path) {
   const { token, owner, repo, branch } = requireGitHubEnv(env);
 
-  const url = `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(branch)}`;
+  const url = `https://api.github.com/repos/${owner}/${repo}/contents/${ghPath(path)}?ref=${encodeURIComponent(branch)}`;
   const res = await fetch(url, {
     headers: {
       Authorization: `Bearer ${token}`,
@@ -188,7 +200,7 @@ async function readJsonFileFromGitHub(env, path) {
 async function writeJsonFileToGitHub(env, path, obj, sha, message) {
   const { token, owner, repo, branch } = requireGitHubEnv(env);
 
-  const url = `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`;
+  const url = `https://api.github.com/repos/${owner}/${repo}/contents/${ghPath(path)}`;
   const body = {
     message: message || "Update episode notes",
     content: utf8ToB64(JSON.stringify(obj, null, 2)),
