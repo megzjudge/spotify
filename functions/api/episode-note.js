@@ -4,11 +4,9 @@
 // POST /api/episode-note { episodeId, notes:[{timestamp,text}] }
 //
 // Stores notes in a JSON file in GitHub (Contents API).
-// File format (recommended):
+// File format (top-level map):
 // {
-//   "episodeNotes": {
-//     "<episodeId>": [ { "timestamp":"00:00:00", "text":"..." }, ... ]
-//   }
+//   "<episodeId>": [ { "timestamp":"00:00:00", "text":"..." }, ... ]
 // }
 
 export async function onRequestOptions() {
@@ -24,30 +22,25 @@ export async function onRequestGet({ env, request }) {
     const cfg = getGithubConfig(env);
     const file = await githubReadJson(cfg, { allowMissing: true });
 
-    const root = (file.data && typeof file.data === "object") ? file.data : {};
-    const episodeNotes =
-      (root.episodeNotes && typeof root.episodeNotes === "object") ? root.episodeNotes : {};
+    const all = (file.data && typeof file.data === "object") ? file.data : {};
+    const raw = Array.isArray(all[episodeId]) ? all[episodeId] : [];
 
-    const raw = Array.isArray(episodeNotes[episodeId]) ? episodeNotes[episodeId] : [];
     const notes = raw
-      .map((n) => ({
-        timestamp: normalizeTimestamp(n?.timestamp ?? "00:00:00"),
-        text: String(n?.text ?? "").slice(0, 5000)
+      .map((row) => ({
+        timestamp: normalizeTimestamp(row?.timestamp ?? ""),
+        text: String(row?.text ?? "").slice(0, 5000)
       }))
-      .filter((n) => n.timestamp || n.text);
+      .filter((r) => r.timestamp || r.text);
 
     return json({ ok: true, episodeId, notes }, 200);
   } catch (err) {
-    return json(
-      {
-        ok: false,
-        error: "Episode note read failed",
-        message: String(err?.message || err),
-        details: err?.details || null,
-        stack: String(err?.stack || "")
-      },
-      500
-    );
+    return json({
+      ok: false,
+      error: "Episode note read failed",
+      message: String(err?.message || err),
+      details: err?.details || null,
+      stack: String(err?.stack || "")
+    }, 500);
   }
 }
 
@@ -70,67 +63,53 @@ export async function onRequestPost({ env, request }) {
 
     const cfg = getGithubConfig(env);
 
-    // 1) Read current file (or create if missing)
+    // Read current file (or create if missing)
     const file = await githubReadJson(cfg, { allowMissing: true });
+    const all = (file.data && typeof file.data === "object") ? file.data : {};
 
-    const base = (file.data && typeof file.data === "object") ? file.data : {};
-    const episodeNotes =
-      (base.episodeNotes && typeof base.episodeNotes === "object") ? base.episodeNotes : {};
+    // Update
+    all[episodeId] = notes;
 
-    // 2) Update entry
-    episodeNotes[episodeId] = notes;
-
-    const next = { ...base, episodeNotes };
-
-    // 3) Write back
+    // Write back with sha (or create)
     const msg = `Update episode notes: ${episodeId}`;
-    const write = await githubWriteJson(cfg, next, {
-      sha: file.sha || null,
-      message: msg
-    });
+    const write = await githubWriteJson(cfg, all, { sha: file.sha || null, message: msg });
 
-    return json(
-      {
-        ok: true,
-        episodeId,
-        notes,
-        commit: {
-          sha: write?.commitSha || null,
-          url: write?.commitUrl || null
-        }
-      },
-      200
-    );
+    return json({
+      ok: true,
+      episodeId,
+      notes,
+      commit: { sha: write.commitSha || null }
+    }, 200);
+
   } catch (err) {
-    return json(
-      {
-        ok: false,
-        error: "Episode note write failed",
-        message: String(err?.message || err),
-        details: err?.details || null,
-        stack: String(err?.stack || "")
-      },
-      500
-    );
+    return json({
+      ok: false,
+      error: "Episode note write failed",
+      message: String(err?.message || err),
+      details: err?.details || null,
+      stack: String(err?.stack || "")
+    }, 500);
   }
 }
 
 /* =========================
-   GitHub helpers
+   GitHub helpers (single canonical config)
 ========================= */
 
 function getGithubConfig(env) {
   const owner = env.GITHUB_OWNER;
   const repo = env.GITHUB_REPO;
-  const path = env.GITHUB_PATH; // you set: "data/episode-notes.json"
   const branch = env.GITHUB_BRANCH || "main";
   const token = env.GITHUB_TOKEN;
 
+  // Canonical single path:
+  const path = env.GITHUB_PATH; // MUST be "data/episode-notes.json"
+
   const missing = [];
+  if (!token) missing.push("GITHUB_TOKEN");
   if (!owner) missing.push("GITHUB_OWNER");
   if (!repo) missing.push("GITHUB_REPO");
   if (!path) missing.push("GITHUB_PATH");
-  if (!token) missing.push("GITHUB_TOKEN");
 
   if (missing.length) {
     const e = new Error(`Missing GitHub secrets: ${missing.join(", ")}`);
@@ -138,16 +117,12 @@ function getGithubConfig(env) {
     throw e;
   }
 
-  return { owner, repo, path: String(path).replace(/^\/+/, ""), branch, token };
+  return { owner, repo, path, branch, token };
 }
 
-// Preserve slashes; encode each segment only.
+// Encode each segment, preserve slashes.
 function ghPath(p) {
-  return String(p || "")
-    .replace(/^\/+/, "")
-    .split("/")
-    .map(encodeURIComponent)
-    .join("/");
+  return String(p || "").split("/").map(encodeURIComponent).join("/");
 }
 
 async function githubReadJson(cfg, { allowMissing = false } = {}) {
@@ -167,9 +142,7 @@ async function githubReadJson(cfg, { allowMissing = false } = {}) {
 
   const text = await res.text();
   let payload = null;
-  try {
-    payload = text ? JSON.parse(text) : null;
-  } catch {}
+  try { payload = text ? JSON.parse(text) : null; } catch {}
 
   if (!res.ok) {
     const e = new Error(`GitHub read failed (${res.status})`);
@@ -177,34 +150,30 @@ async function githubReadJson(cfg, { allowMissing = false } = {}) {
     throw e;
   }
 
-  const contentB64 = payload?.content;
+  const contentB64 = String(payload?.content || "");
   const sha = payload?.sha || null;
 
-  if (!contentB64) return { data: {}, sha };
+  const raw = contentB64 ? b64ToUtf8(contentB64) : "{}";
 
-  const raw = b64ToUtf8(contentB64);
-
-  let jsonData = {};
-  try {
-    jsonData = raw ? JSON.parse(raw) : {};
-  } catch {
+  let data = {};
+  try { data = raw ? JSON.parse(raw) : {}; } catch {
     const e = new Error("GitHub file is not valid JSON");
     e.details = { path: cfg.path };
     throw e;
   }
 
-  return { data: jsonData, sha };
+  return { data, sha };
 }
 
 async function githubWriteJson(cfg, obj, { sha = null, message = "Update JSON" } = {}) {
   const url = `https://api.github.com/repos/${encodeURIComponent(cfg.owner)}/${encodeURIComponent(cfg.repo)}/contents/${ghPath(cfg.path)}`;
 
-  const payload = {
+  const body = {
     message,
     content: utf8ToB64(JSON.stringify(obj, null, 2) + "\n"),
     branch: cfg.branch
   };
-  if (sha) payload.sha = sha;
+  if (sha) body.sha = sha;
 
   const res = await fetch(url, {
     method: "PUT",
@@ -214,56 +183,32 @@ async function githubWriteJson(cfg, obj, { sha = null, message = "Update JSON" }
       "Content-Type": "application/json",
       "User-Agent": "cf-pages-functions"
     },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(body)
   });
 
   const text = await res.text();
-  let data = null;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {}
+  let payload = null;
+  try { payload = text ? JSON.parse(text) : null; } catch {}
 
   if (!res.ok) {
     const e = new Error(`GitHub write failed (${res.status})`);
-    e.details = { endpoint: url, body: data || text };
+    e.details = { endpoint: url, body: payload || text };
     throw e;
   }
 
-  return {
-    commitSha: data?.commit?.sha || null,
-    commitUrl: data?.commit?.html_url || null
-  };
+  return { commitSha: payload?.commit?.sha || null };
 }
 
 /* =========================
-   Base64 UTF-8 helpers (Workers-safe)
-========================= */
-
-function utf8ToB64(str) {
-  const bytes = new TextEncoder().encode(String(str || ""));
-  let binary = "";
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary);
-}
-
-function b64ToUtf8(b64) {
-  const clean = String(b64 || "").replace(/\s+/g, "");
-  const binary = atob(clean);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return new TextDecoder().decode(bytes);
-}
-
-/* =========================
-   Timestamp normalization
+   Utilities
 ========================= */
 
 function normalizeTimestamp(s) {
-  // Accept "SS", "MM:SS", "HH:MM:SS" -> return "HH:MM:SS"
   const raw = String(s || "").trim();
   if (!raw) return "00:00:00";
 
   const parts = raw.split(":").map((x) => x.trim()).filter(Boolean);
+
   if (parts.length === 1) {
     const ss = clampInt(parts[0], 0, 59, 0);
     return `00:00:${String(ss).padStart(2, "0")}`;
@@ -273,6 +218,7 @@ function normalizeTimestamp(s) {
     const ss = clampInt(parts[1], 0, 59, 0);
     return `00:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
   }
+
   const hh = clampInt(parts[0], 0, 999, 0);
   const mm = clampInt(parts[1], 0, 59, 0);
   const ss = clampInt(parts[2], 0, 59, 0);
@@ -285,14 +231,28 @@ function clampInt(v, min, max, fallback) {
   return Math.min(max, Math.max(min, Math.floor(n)));
 }
 
-/* =========================
-   Response helpers
-========================= */
+function b64ToUtf8(b64) {
+  const clean = String(b64 || "").replace(/\s+/g, "");
+  const bin = atob(clean);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
+}
+
+function utf8ToB64(str) {
+  const bytes = new TextEncoder().encode(String(str || ""));
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
 
 function json(obj, status = 200) {
   return new Response(JSON.stringify(obj, null, 2), {
     status,
-    headers: { ...corsHeaders(), "Content-Type": "application/json; charset=utf-8" }
+    headers: {
+      ...corsHeaders(),
+      "Content-Type": "application/json; charset=utf-8"
+    }
   });
 }
 
