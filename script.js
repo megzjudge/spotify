@@ -694,7 +694,8 @@
               alt=""
               decoding="async"
               referrerpolicy="no-referrer"
-            >
+              onerror="this.onerror=null;this.src='https://spotify.jdge.cc/images/spotify_logo.png';"
+            />
           </a>
 
           <div class="podcast-ep-meta">
