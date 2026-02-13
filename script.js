@@ -274,7 +274,7 @@
   }
 
   /***********************
-   * Statistics (FIXED songs count)
+   * Statistics
    ***********************/
   function computeSongCountFromSnapshot({ includeOthers = false, includeYearSummary = false } = {}) {
     const sections = state.snapshot?.sections || {};
@@ -295,7 +295,7 @@
     return sum;
   }
 
-  // ✅ NEW: compute podcast stats from state.podcast.items (what we actually loaded)
+  // ✅ compute podcast stats from what we actually loaded (avoids refresh-side issues)
   function computePodcastStatsFromState() {
     const items = Array.isArray(state.podcast?.items) ? state.podcast.items : [];
     const episodes = items.length;
@@ -310,7 +310,7 @@
     const totals = state.snapshot?.totals || {};
     const playlists = totals.playlists ?? "–";
 
-    // ✅ compute total songs from playlist metadata (matches what you see in UI cards)
+    // ✅ compute total songs from playlist metadata (matches UI cards)
     const computedSongs = computeSongCountFromSnapshot({
       includeOthers: false,
       includeYearSummary: false
@@ -319,19 +319,10 @@
 
     const songHours = typeof totals.songMs === "number" ? fmtHoursFromMs(totals.songMs) : "–";
 
-    // ✅ Prefer podcast stats from loaded podcast column (more reliable than /api/refresh)
-    const podFromState = computePodcastStatsFromState();
-    const podEps =
-      podFromState.episodes > 0
-        ? podFromState.episodes
-        : (totals.podcastEpisodes ?? "–");
-
-    const podMs =
-      podFromState.episodes > 0
-        ? podFromState.ms
-        : (typeof totals.podcastMs === "number" ? totals.podcastMs : null);
-
-    const podHours = (podMs != null) ? fmtHoursFromMs(podMs) : "–";
+    const pod = computePodcastStatsFromState();
+    const podEps = pod.episodes > 0 ? pod.episodes : (totals.podcastEpisodes ?? "–");
+    const podHours = pod.episodes > 0 ? fmtHoursFromMs(pod.ms) :
+      (typeof totals.podcastMs === "number" ? fmtHoursFromMs(totals.podcastMs) : "–");
 
     grid.innerHTML = `
       <div class="stat-card span-2">
@@ -674,6 +665,55 @@
     return entry.notes.some((n) => String(n?.text || "").trim().length > 0);
   }
 
+  function notesForEpisode(episodeId) {
+    if (!episodeId) return [];
+    const entry = state.episodeNotes.cache?.[episodeId];
+    const notes = Array.isArray(entry?.notes) ? entry.notes : [];
+    return notes
+      .map((n) => ({
+        timestamp: normalizeTimestamp(n?.timestamp),
+        text: String(n?.text || "")
+      }))
+      .filter((n) => n.timestamp || n.text)
+      .filter((n) => String(n.text || "").trim().length > 0); // show only meaningful text
+  }
+
+  function renderSavedNotesBlock(episodeId) {
+    const notes = notesForEpisode(episodeId);
+    if (!notes.length) return "";
+
+    // NOTE: we render a “printed” version plus an edit emoji that re-opens editor + repopulates
+    const lines = notes.slice(0, 6).map((n) => {
+      const ts = escapeHtml(n.timestamp);
+      const tx = escapeHtml(n.text);
+      return `
+        <div class="epnote-saved-line">
+          <div class="epnote-saved-ts">${ts}</div>
+          <div class="epnote-saved-text">${tx}</div>
+        </div>
+      `;
+    }).join("");
+
+    const more = notes.length > 6 ? `<div class="epnote-saved-more">…and ${notes.length - 6} more</div>` : "";
+
+    return `
+      <div class="epnote-saved" data-epnote-saved="${escapeHtml(episodeId)}">
+        <div class="epnote-saved-head">
+          <div class="epnote-saved-title">Saved notes</div>
+          <button
+            class="epnote-edit"
+            type="button"
+            title="Edit notes"
+            aria-label="Edit notes"
+            data-epnote-edit="${escapeHtml(episodeId)}"
+          >📝</button>
+        </div>
+        ${lines}
+        ${more}
+      </div>
+    `;
+  }
+
   /***********************
    * Podcast panel
    ***********************/
@@ -799,6 +839,9 @@
     const err = entry?.error || null;
     const savedAt = entry?.savedAt || null;
 
+    // ✅ printed saved notes (only when closed)
+    const savedBlock = (!isOpen && hasNotes && episodeId) ? renderSavedNotesBlock(episodeId) : "";
+
     const editorHtml = isOpen && episodeId ? renderEpisodeNotesEditor(episodeId) : "";
 
     const statusLine = isOpen && episodeId
@@ -841,6 +884,7 @@
           >💭</button>
         </div>
 
+        ${savedBlock}
         ${statusLine}
         ${editorHtml}
       </li>
@@ -855,13 +899,15 @@
       img.__fallbackBound = true;
 
       img.addEventListener("error", () => {
-        // If already fallback, stop
         if (img.src && img.src.includes("spotify_logo.png")) return;
         img.src = FALLBACK;
       }, { passive: true });
     });
   }
 
+  /***********************
+   * Notes editor UI (timestamp on one line; textbox under it)
+   ***********************/
   function renderEpisodeNotesEditor(episodeId) {
     const entry = getEpisodeCacheEntry(episodeId);
     const notes = Array.isArray(entry?.notes) && entry.notes.length
@@ -872,33 +918,35 @@
       const ts = escapeHtml(normalizeTimestamp(n?.timestamp));
       const tx = escapeHtml(String(n?.text || ""));
       return `
-        <div class="epnote-row" data-epnote-row="${idx}">
-          <button class="epnote-add" type="button" title="Add row" aria-label="Add row" data-epnote-add="${escapeHtml(episodeId)}">👇🏻</button>
+        <div class="epnote-row epnote-row-stacked" data-epnote-row="${idx}">
+          <div class="epnote-row-top">
+            <button class="epnote-add" type="button" title="Add row" aria-label="Add row" data-epnote-add="${escapeHtml(episodeId)}">👇🏻</button>
 
-          <input
-            class="epnote-time"
-            type="text"
-            inputmode="text"
-            spellcheck="false"
-            value="${ts}"
-            placeholder="00:00:00"
-            data-epnote-time="${escapeHtml(episodeId)}"
-          />
+            <input
+              class="epnote-time"
+              type="text"
+              inputmode="text"
+              spellcheck="false"
+              value="${ts}"
+              placeholder="00:00:00"
+              data-epnote-time="${escapeHtml(episodeId)}"
+            />
+
+            <button
+              class="epnote-save"
+              type="button"
+              title="Save"
+              aria-label="Save"
+              data-epnote-save="${escapeHtml(episodeId)}"
+            >✅</button>
+          </div>
 
           <textarea
             class="epnote-text"
-            rows="1"
+            rows="2"
             placeholder=""
             data-epnote-text="${escapeHtml(episodeId)}"
           >${tx}</textarea>
-
-          <button
-            class="epnote-save"
-            type="button"
-            title="Save"
-            aria-label="Save"
-            data-epnote-save="${escapeHtml(episodeId)}"
-          >✅</button>
         </div>
       `;
     }).join("");
@@ -924,6 +972,14 @@
         return;
       }
 
+      // ✅ NEW: edit emoji on printed notes block
+      const editId = t?.getAttribute?.("data-epnote-edit");
+      if (editId) {
+        e.preventDefault();
+        await openEditorForExistingNotes(editId);
+        return;
+      }
+
       const addId = t?.getAttribute?.("data-epnote-add");
       if (addId) {
         e.preventDefault();
@@ -943,8 +999,37 @@
       const ta = e.target;
       if (ta && ta.classList && ta.classList.contains("epnote-text")) {
         ta.style.height = "auto";
-        ta.style.height = `${Math.min(180, ta.scrollHeight)}px`;
+        ta.style.height = `${Math.min(220, ta.scrollHeight)}px`;
       }
+    });
+  }
+
+  async function openEditorForExistingNotes(episodeId) {
+    if (!episodeId) return;
+
+    state.episodeNotes.openEpisodeId = episodeId;
+    const entry = getEpisodeCacheEntry(episodeId);
+    renderPodcastColumn();
+
+    // Ensure we have saved notes loaded; if not, fetch.
+    if (!entry.loaded) {
+      try {
+        entry.error = null;
+        renderPodcastColumn();
+        await fetchEpisodeNotes(episodeId);
+      } catch (err) {
+        entry.error = String(err?.message || err);
+      }
+      renderPodcastColumn();
+    }
+
+    // Focus first textarea for quick editing
+    requestAnimationFrame(() => {
+      try {
+        const li = document.querySelector(`.podcast-item[data-episode-id="${CSS.escape(episodeId)}"]`);
+        const ta = li?.querySelector(`textarea[data-epnote-text="${CSS.escape(episodeId)}"]`);
+        if (ta) ta.focus();
+      } catch {}
     });
   }
 
@@ -986,6 +1071,15 @@
 
     state.episodeNotes.openEpisodeId = episodeId;
     renderPodcastColumn();
+
+    requestAnimationFrame(() => {
+      try {
+        const li = document.querySelector(`.podcast-item[data-episode-id="${CSS.escape(episodeId)}"]`);
+        const textareas = li?.querySelectorAll(`textarea[data-epnote-text="${CSS.escape(episodeId)}"]`) || [];
+        const last = textareas.length ? textareas[textareas.length - 1] : null;
+        if (last) last.focus();
+      } catch {}
+    });
   }
 
   function collectEpisodeNotesFromDom(episodeId) {
@@ -1014,6 +1108,7 @@
 
     const rows = collectEpisodeNotesFromDom(episodeId);
 
+    // reflect current UI into cache (so the “printed” block matches what you saved)
     entry.notes = rows.map((r) => ({ timestamp: normalizeTimestamp(r.timestamp), text: String(r.text || "") }));
     entry.loaded = true;
     entry.error = null;
@@ -1031,7 +1126,9 @@
     try {
       await saveEpisodeNotes(episodeId, rows, authToken);
 
-      // ✅ UX: hide notes after save; only show again on bubble click
+      // ✅ UX requested:
+      // - When ✅ is clicked, “print” saved results (we render the saved block)
+      // - and “remove from boxes” (we close the editor so boxes are gone)
       state.episodeNotes.openEpisodeId = null;
       renderPodcastColumn();
     } catch (err) {
@@ -1163,7 +1260,7 @@
         : [];
 
       state.episodeNotes.openEpisodeId = null;
-      state.episodeNotes.episodesWithNotes = new Set(); // ✅ clear; repopulate from summary
+      state.episodeNotes.episodesWithNotes = new Set(); // clear; repopulate from summary
 
       await Promise.all([
         loadOthersAndYearSummaryFallback(),
@@ -1171,7 +1268,7 @@
         loadEpisodeNotesSummary()
       ]);
 
-      // ✅ After podcast loads, stats will reflect state.podcast.items
+      // NOTE: podcast stats rely on state.podcast.items, so render after loadPodcastColumn()
       renderStatistics();
       renderFilterPills();
       renderPlaylists();
