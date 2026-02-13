@@ -189,7 +189,10 @@ main {
 
 .app-grid {
   display: grid;
-  grid-template-columns: 340px 1fr 340px;
+
+  /* ✅ CHANGE: make middle (Playlists) narrower and right (Podcast) wider */
+  grid-template-columns: 340px minmax(320px, 1fr) 420px;
+
   gap: 18px;
   align-items: start;
 }
