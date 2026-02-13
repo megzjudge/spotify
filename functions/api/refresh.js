@@ -5,7 +5,7 @@ export async function onRequestOptions() {
 }
 
 export async function onRequestPost(context) {
-  const { env, request, waitUntil } = context;
+  const { env, request } = context;
 
   try {
     let body = {};
@@ -18,15 +18,17 @@ export async function onRequestPost(context) {
      ***********************/
     const PODCAST_PLAYLIST_ID = "2tHrihmpYzDbJ8rit7HtFR";
 
+    // ✅ Only keep playlists you have confirmed work (your console shows these 4 are OK)
     const OTHERS_PLAYLIST_IDS = [
       "71z6BdHlnfNj4DKRhuu1Fk",
       "7jYNznHoIYgJBzwT5jpoOe",
-      "41PZG18MrSTagagiIaiG4X",
-      "37i9dQZF1DX5mB2C8gBeUM",
-      "37i9dQZF1EQnsJ0xmvpihE"
+      "41PZG18MrSTagagiIaiG4X"
     ];
 
-    // ✅ NEW: hide playlists by ID (client can also hide, but server-side keeps it out everywhere)
+    // ❌ Removed because your token returns playlist meta 404:
+    // "37i9dQZF1DX5mB2C8gBeUM",
+    // "37i9dQZF1EQnsJ0xmvpihE"
+
     const HIDE_PLAYLIST_IDS = new Set([
       // "PUT_PLAYLIST_ID_HERE",
     ]);
@@ -36,7 +38,7 @@ export async function onRequestPost(context) {
     const NOT_PUBLIC_PREFIXES = ["NP:", "[Not Public]"];
     const NOT_PUBLIC_TAG = "#notpublic";
 
-    // Only hard-allowlist things you *know* work for your token
+    // Hard allowlist for “must show”
     const ALLOWLIST_IDS = new Set([
       PODCAST_PLAYLIST_ID,
       ...OTHERS_PLAYLIST_IDS
@@ -69,7 +71,6 @@ export async function onRequestPost(context) {
     const filtered = playlistsRaw.filter(p => {
       if (!p?.id) return false;
 
-      // ✅ hard hide
       if (HIDE_PLAYLIST_IDS.has(p.id)) return false;
 
       // keep allowlisted playlists even if not "mine"
@@ -139,66 +140,19 @@ export async function onRequestPost(context) {
     );
 
     /***********************
-     * METRICS (lightweight)
+     * METRICS
      *
-     * ✅ totals.songs is computed from playlist metadata totals (fast)
+     * ✅ totals.songs is metadata-based (fast)
      * ✅ totals.songMsApprox is immediate
-     * ✅ totals.songMsExact is read from KV (if available)
-     * ✅ exact compute is triggered via /api/song-hours in waitUntil (background)
+     * ✅ exact hours are computed client-side by your Web Worker using /api/playlist
      ***********************/
     const totalSongs = normal.reduce((acc, p) => acc + (Number(p.totalTracks) || 0), 0);
 
-    // Approx: songs * 3 min each
     const APPROX_MIN_PER_SONG = 3;
     const songMsApprox = totalSongs * APPROX_MIN_PER_SONG * 60_000;
 
-    // Try read cached exact from KV (if bound)
-    let songMsExact = null;
-    let songMsExactUpdatedAt = null;
-    let songHoursStatus = "approx";
-
-    try {
-      if (env?.SPOTIFY_CACHE?.get) {
-        const exactRaw = await env.SPOTIFY_CACHE.get("songMsExact");
-        if (exactRaw) {
-          const exactObj = JSON.parse(exactRaw);
-          if (typeof exactObj?.ms === "number") {
-            songMsExact = exactObj.ms;
-            songMsExactUpdatedAt = exactObj.updatedAt ?? null;
-            songHoursStatus = "exact";
-          }
-        } else {
-          // If a job is already running, reflect that
-          const running = await env.SPOTIFY_CACHE.get("songMsExactRunning");
-          if (running === "1") songHoursStatus = "computing";
-        }
-      }
-    } catch {
-      // ignore KV parse errors
-    }
-
-    // ✅ Kick off the heavy exact job in the background (do not await)
-    // We trigger your /api/song-hours endpoint. If that endpoint is GET-only, flip this to GET.
-    try {
-      if (typeof waitUntil === "function") {
-        const u = new URL(request.url);
-        u.pathname = "/api/song-hours";
-        waitUntil(
-          fetch(u.toString(), {
-            method: "POST",
-            headers: { "Content-Type": "application/json", Accept: "application/json" },
-            body: JSON.stringify({
-              // allow song-hours.js to use this as a cheap starting point / validation
-              totalSongs,
-              approxMs: songMsApprox,
-              avgMinutesPerSong: APPROX_MIN_PER_SONG
-            })
-          }).catch(() => {})
-        );
-      }
-    } catch {
-      // ignore
-    }
+    // Provide the exact playlist IDs the worker should compute from:
+    const computePlaylistIds = normal.map(p => p.id).filter(Boolean);
 
     const resp = {
       lastUpdated: new Date().toISOString(),
@@ -207,16 +161,23 @@ export async function onRequestPost(context) {
         playlists: normal.length,
         songs: totalSongs,
 
-        // ✅ new strategy
         songMsApprox,
-        songMsExact,
-        songMsExactUpdatedAt,
-        songHoursStatus,
 
-        // kept for backward compatibility; UI should prefer exact/approx above
-        songMs: songMsExact ?? null,
+        // server no longer pretends to compute exact
+        songMsExact: null,
+        songMsExactUpdatedAt: null,
+        songHoursStatus: "approx",
 
-        podcastEpisodes: null,     // optional: same treatment later
+        // kept for backward compatibility
+        songMs: null,
+
+        // NEW: worker input
+        songCompute: {
+          playlistIds: computePlaylistIds,
+          avgMinutesPerSong: APPROX_MIN_PER_SONG
+        },
+
+        podcastEpisodes: null,
         podcastMs: null
       },
 
@@ -231,7 +192,8 @@ export async function onRequestPost(context) {
         fetchedPlaylists: playlistsRaw.length,
         filteredPlaylists: normalized.length,
         yearSummaryMatched: yearSummaryPlaylists.map(p => ({ id: p.id, name: p.name })),
-        hideIdsCount: HIDE_PLAYLIST_IDS.size
+        hideIdsCount: HIDE_PLAYLIST_IDS.size,
+        allowlist: Array.from(ALLOWLIST_IDS)
       };
     }
 
