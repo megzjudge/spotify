@@ -29,7 +29,28 @@ export async function onRequestPost({ env, request }) {
 
     // Items (optional)
     const items = limit === 0 ? [] : await fetchPlaylistItemsBounded(token, playlistId, limit);
-    const normalizedItems = items.map(normalizeItem).filter(Boolean);
+    let normalizedItems = items.map(normalizeItem).filter(Boolean);
+
+    // ✅ ENRICH: playlist-items often omit episode artwork.
+    // If any episodes have null image, fetch details via /v1/episodes?ids=...
+    const missingEpIds = normalizedItems
+      .filter((x) => x.type === "episode" && !x.image && x.id)
+      .map((x) => x.id);
+
+    if (missingEpIds.length) {
+      const eps = await fetchEpisodesByIds(token, missingEpIds);
+
+      // Map episodeId -> best image URL
+      const idToImg = new Map(
+        (eps || []).map((ep) => [ep?.id, pickFirstImageUrl(ep?.images) || null])
+      );
+
+      normalizedItems = normalizedItems.map((x) => {
+        if (x.type !== "episode" || x.image || !x.id) return x;
+        const img = idToImg.get(x.id) || null;
+        return img ? { ...x, image: img } : x;
+      });
+    }
 
     return json({ playlist, items: normalizedItems }, 200);
   } catch (err) {
@@ -114,19 +135,9 @@ async function fetchPlaylist(token, playlistId) {
   return fetchJsonOrThrow(`https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}`, token, "playlist meta");
 }
 
-/**
- * ✅ FIX: Spotify sometimes omits episode images in playlist-items responses unless you request them.
- * We force the response to include:
- * - track.images (episodes can expose images here)
- * - track.show.images (often where show/episode artwork lives)
- * - album.images (for normal tracks)
- */
 async function fetchPlaylistItemsBounded(token, playlistId, maxItems) {
   let items = [];
-
-  let next =
-    `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}/tracks?limit=100` +
-    `&fields=items(added_at,track(id,name,type,duration_ms,external_urls,artists(name),album(images),images,show(name,images))),next`;
+  let next = `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}/tracks?limit=100`;
 
   while (next && items.length < maxItems) {
     const data = await fetchJsonOrThrow(next, token, "playlist items");
@@ -137,20 +148,36 @@ async function fetchPlaylistItemsBounded(token, playlistId, maxItems) {
   return items.slice(0, maxItems);
 }
 
+// ✅ Episode enrichment lookup (50 ids per request)
+async function fetchEpisodesByIds(token, ids) {
+  const clean = (ids || [])
+    .map((x) => String(x || "").trim())
+    .filter(Boolean);
+
+  if (!clean.length) return [];
+
+  const out = [];
+  for (let i = 0; i < clean.length; i += 50) {
+    const chunk = clean.slice(i, i + 50);
+    const url = `https://api.spotify.com/v1/episodes?ids=${encodeURIComponent(chunk.join(","))}`;
+    const data = await fetchJsonOrThrow(url, token, "episodes lookup");
+    out.push(...(data.episodes || []));
+  }
+  return out;
+}
+
 /* =========================
    NORMALIZATION
 ========================= */
 
 function pickFirstImageUrl(images) {
   if (!Array.isArray(images) || !images.length) return null;
-  // Spotify usually returns [{url,height,width},...]
   return images?.[0]?.url || null;
 }
 
 function normalizePlaylist(p, myUserId) {
   const ownerId = p.owner?.id || null;
   const ownerIsMe = myUserId ? ownerId === myUserId : false;
-
   const ownerLabel = ownerIsMe ? "by me" : "by others";
 
   return {
@@ -178,7 +205,7 @@ function normalizeItem(it) {
       type: "track",
       id: obj.id,
       name: obj.name,
-      artists: (obj.artists || []).map(a => a.name).filter(Boolean),
+      artists: (obj.artists || []).map((a) => a.name).filter(Boolean),
       url,
       durationMs,
       addedAt: it.added_at || null,
@@ -187,7 +214,7 @@ function normalizeItem(it) {
   }
 
   if (type === "episode") {
-    // ✅ Episode artwork can be in obj.images OR obj.show.images depending on endpoint/fields
+    // Often missing in playlist context; we enrich later via /v1/episodes
     const episodeImage =
       pickFirstImageUrl(obj.images) ||
       pickFirstImageUrl(obj.show?.images) ||
