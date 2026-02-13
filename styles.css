@@ -961,7 +961,9 @@ footer {
   :root {
     --pad: 16px;
     --colMaxH: none;
-    --mobileListMaxH: 264px;
+
+    /* ✅ +33% taller lists on mobile */
+    --mobileListMaxH: 352px;
 
     --podThumb: 72px;
     --podRadius: 18px;
@@ -980,7 +982,7 @@ footer {
   .primary-button { width: 100%; min-width: 0; }
   .container-header { flex-direction: column; align-items: stretch; }
 
-  /* On mobile: don't force 9 rows; use a smaller max-height */
+  /* On mobile: don't force 9 rows; use a larger max-height */
   #podcastList {
     height: auto;
     max-height: var(--mobileListMaxH);
