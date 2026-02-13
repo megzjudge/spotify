@@ -8,7 +8,7 @@
   const API_PLAYLIST = "/api/playlist";
   const API_EPISODE_NOTE = "/api/episode-note";
 
-  // ✅ NEW
+  // ✅ song-hours endpoint
   const API_SONG_HOURS = "/api/song-hours";
 
   const PODCAST_PLAYLIST_ID = "2tHrihmpYzDbJ8rit7HtFR";
@@ -53,13 +53,25 @@
       tries: 0
     },
 
-    // Episode notes (GitHub-backed)
+    // Episode notes
     episodeNotes: {
-      // episodeId -> { notes:[{timestamp,text}], loaded:boolean, saving:boolean, savedAt:number|null, error:string|null }
+      // episodeId -> {
+      //   savedNotes:[{timestamp,text}],
+      //   draftNotes:[{timestamp,text}],
+      //   loadedSaved:boolean,
+      //   saving:boolean,
+      //   savedAt:number|null,
+      //   error:string|null
+      // }
       cache: Object.create(null),
+
       openEpisodeId: null,
 
-      // ✅ episodeIds known to have notes (from summary endpoint)
+      // ✅ "append" when opening via 💭 bubble (keep saved notes outside; draft empty)
+      // ✅ "edit"   when opening via 📝 (populate editor with saved notes)
+      openMode: null,
+
+      // episodeIds known to have notes (from summary endpoint)
       episodesWithNotes: new Set()
     }
   };
@@ -131,6 +143,24 @@
       return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
     }
     return "00:00:00";
+  }
+
+  function normalizeNotesArray(arr) {
+    const src = Array.isArray(arr) ? arr : [];
+    const out = src
+      .map((n) => ({
+        timestamp: normalizeTimestamp(n?.timestamp),
+        text: String(n?.text || "").trim()
+      }))
+      .filter((n) => n.timestamp || n.text);
+
+    // keep at least one row if empty
+    return out.length ? out : [{ timestamp: "00:00:00", text: "" }];
+  }
+
+  function meaningfulNotes(arr) {
+    const src = Array.isArray(arr) ? arr : [];
+    return src.filter((n) => String(n?.text || "").trim().length > 0);
   }
 
   function blankUntilClick() {
@@ -306,7 +336,6 @@
     return sum;
   }
 
-  // ✅ compute podcast stats from what we actually loaded (avoids refresh-side issues)
   function computePodcastStatsFromState() {
     const items = Array.isArray(state.podcast?.items) ? state.podcast.items : [];
     const episodes = items.length;
@@ -337,14 +366,12 @@
     const totals = state.snapshot?.totals || {};
     const playlists = totals.playlists ?? "–";
 
-    // ✅ compute total songs from playlist metadata (matches UI cards)
     const computedSongs = computeSongCountFromSnapshot({
       includeOthers: false,
       includeYearSummary: false
     });
     const songs = computedSongs > 0 ? computedSongs : (totals.songs ?? "–");
 
-    // ✅ NEW: exact->approx fallback
     const songHours = getSongHoursDisplay(totals);
 
     const pod = computePodcastStatsFromState();
@@ -392,7 +419,6 @@
   }
 
   async function kickSongHoursCompute(totalSongs, approxMs) {
-    // Trigger compute (your song-hours.js should treat this as "start job if needed")
     try {
       await fetch(API_SONG_HOURS, {
         method: "POST",
@@ -414,7 +440,6 @@
     const totals = state.snapshot?.totals || {};
     if (typeof totals.songMsExact === "number") return;
 
-    // Mark as computing in UI if we have approx
     if (typeof totals.songMsApprox === "number") {
       totals.songHoursStatus = "computing";
       renderStatistics();
@@ -441,7 +466,6 @@
           null;
 
         if (typeof exactMs === "number") {
-          // overwrite snapshot totals and re-render
           state.snapshot.totals.songMsExact = exactMs;
           state.snapshot.totals.songMsExactUpdatedAt = data.updatedAt ?? null;
           state.snapshot.totals.songHoursStatus = "exact";
@@ -451,7 +475,6 @@
           return;
         }
 
-        // keep hint in sync if endpoint exposes running
         if (data.running === true || data.running === "1") {
           if (state.snapshot?.totals) state.snapshot.totals.songHoursStatus = "computing";
         }
@@ -603,19 +626,35 @@
   function getEpisodeCacheEntry(episodeId) {
     if (!episodeId) return null;
     const c = state.episodeNotes.cache;
+
     if (!c[episodeId]) {
       c[episodeId] = {
-        notes: [{ timestamp: "00:00:00", text: "" }],
-        loaded: false,
+        savedNotes: [{ timestamp: "00:00:00", text: "" }],
+        draftNotes: [{ timestamp: "00:00:00", text: "" }],
+        loadedSaved: false,
         saving: false,
         savedAt: null,
         error: null
       };
+      return c[episodeId];
     }
-    return c[episodeId];
+
+    // Backward-compat if older cached shape exists
+    const entry = c[episodeId];
+
+    if (Array.isArray(entry.notes) && !Array.isArray(entry.savedNotes)) {
+      entry.savedNotes = normalizeNotesArray(entry.notes);
+      entry.loadedSaved = !!entry.loaded;
+      delete entry.notes;
+      delete entry.loaded;
+    }
+    if (!Array.isArray(entry.savedNotes)) entry.savedNotes = [{ timestamp: "00:00:00", text: "" }];
+    if (!Array.isArray(entry.draftNotes)) entry.draftNotes = [{ timestamp: "00:00:00", text: "" }];
+    if (typeof entry.loadedSaved !== "boolean") entry.loadedSaved = false;
+
+    return entry;
   }
 
-  // ✅ load a summary list of episodes that have notes (for bubble opacity on refresh)
   async function loadEpisodeNotesSummary() {
     try {
       const res = await fetch(`${API_EPISODE_NOTE}?summary=1`, {
@@ -662,19 +701,16 @@
     }
 
     const notes = Array.isArray(data?.notes) ? data.notes : [];
-    entry.notes = notes.length ? notes.map((n) => ({
-      timestamp: normalizeTimestamp(n?.timestamp),
-      text: String(n?.text || "")
-    })) : [{ timestamp: "00:00:00", text: "" }];
+    entry.savedNotes = normalizeNotesArray(notes);
+    entry.loadedSaved = true;
+    entry.savedAt = null;
+    entry.error = null;
 
-    // ✅ keep summary Set in sync
-    const hasText = entry.notes.some((n) => String(n?.text || "").trim().length > 0);
+    // sync summary set
+    const hasText = meaningfulNotes(entry.savedNotes).length > 0;
     if (hasText) state.episodeNotes.episodesWithNotes.add(String(episodeId));
     else state.episodeNotes.episodesWithNotes.delete(String(episodeId));
 
-    entry.loaded = true;
-    entry.savedAt = null;
-    entry.error = null;
     return entry;
   }
 
@@ -712,15 +748,8 @@
 
     const payload = {
       episodeId,
-      notes: (notes || [])
-        .map((n) => ({
-          timestamp: normalizeTimestamp(n?.timestamp),
-          text: String(n?.text || "").trim()
-        }))
-        .filter((n) => n.timestamp || n.text)
+      notes: normalizeNotesArray(notes)
     };
-
-    if (!payload.notes.length) payload.notes = [{ timestamp: "00:00:00", text: "" }];
 
     const res = await fetch(API_EPISODE_NOTE, {
       method: "POST",
@@ -741,21 +770,19 @@
       entry.saving = false;
       entry.error = msg;
 
-      // If auth failed, forget token so next click prompts again.
       if (res.status === 401 || res.status === 403) setNotesAuthToken("");
 
       renderPodcastColumn();
       throw new Error(msg);
     }
 
-    entry.notes = payload.notes;
-    entry.loaded = true;
+    entry.savedNotes = normalizeNotesArray(payload.notes);
+    entry.loadedSaved = true;
     entry.saving = false;
     entry.error = null;
     entry.savedAt = Date.now();
 
-    // ✅ keep summary Set in sync
-    const hasText = entry.notes.some((n) => String(n?.text || "").trim().length > 0);
+    const hasText = meaningfulNotes(entry.savedNotes).length > 0;
     if (hasText) state.episodeNotes.episodesWithNotes.add(String(episodeId));
     else state.episodeNotes.episodesWithNotes.delete(String(episodeId));
 
@@ -765,30 +792,31 @@
   function episodeHasNotes(episodeId) {
     if (!episodeId) return false;
 
-    // ✅ fast-path: known from summary API (works before any user click)
+    // fast-path: known from summary API
     if (state.episodeNotes.episodesWithNotes?.has(String(episodeId))) return true;
 
-    // fallback: if loaded into cache, inspect it
+    // fallback: if cached, inspect savedNotes
     const entry = state.episodeNotes.cache?.[episodeId];
-    if (!entry || !Array.isArray(entry.notes)) return false;
-    return entry.notes.some((n) => String(n?.text || "").trim().length > 0);
+    if (!entry) return false;
+
+    const saved = Array.isArray(entry.savedNotes) ? entry.savedNotes : [];
+    return meaningfulNotes(saved).length > 0;
   }
 
-  function notesForEpisode(episodeId) {
+  function savedNotesForEpisode(episodeId) {
     if (!episodeId) return [];
-    const entry = state.episodeNotes.cache?.[episodeId];
-    const notes = Array.isArray(entry?.notes) ? entry.notes : [];
-    return notes
-      .map((n) => ({
+    const entry = getEpisodeCacheEntry(episodeId);
+    const notes = Array.isArray(entry?.savedNotes) ? entry.savedNotes : [];
+    return meaningfulNotes(
+      notes.map((n) => ({
         timestamp: normalizeTimestamp(n?.timestamp),
         text: String(n?.text || "")
       }))
-      .filter((n) => n.timestamp || n.text)
-      .filter((n) => String(n.text || "").trim().length > 0); // show only meaningful text
+    );
   }
 
   function renderSavedNotesBlock(episodeId) {
-    const notes = notesForEpisode(episodeId);
+    const notes = savedNotesForEpisode(episodeId);
     if (!notes.length) return "";
 
     const lines = notes.slice(0, 6).map((n) => {
@@ -853,10 +881,8 @@
 
       let items = Array.isArray(data.items) ? data.items : [];
 
-      // keep only episodes, just in case something else sneaks in
       items = items.filter((x) => (x?.type || "") === "episode");
 
-      // newest-first: prefer addedAt if present, else reverse
       const anyAddedAt = items.some((x) => !!x?.addedAt);
       if (anyAddedAt) {
         items.sort((a, b) => {
@@ -944,7 +970,16 @@
     const err = entry?.error || null;
     const savedAt = entry?.savedAt || null;
 
-    const savedBlock = (!isOpen && hasNotes && episodeId) ? renderSavedNotesBlock(episodeId) : "";
+    const mode = isOpen ? state.episodeNotes.openMode : null;
+
+    // ✅ IMPORTANT FIX:
+    // - When opened via 💭 (append), keep Saved notes visible OUTSIDE the editor, and editor is blank.
+    // - When opened via 📝 (edit), editor is prefilled; (optional) hide the printed block to reduce duplication.
+    const showSavedBlock =
+      (!!episodeId && hasNotes && (!isOpen || mode === "append"));
+
+    const savedBlock = showSavedBlock ? renderSavedNotesBlock(episodeId) : "";
+
     const editorHtml = isOpen && episodeId ? renderEpisodeNotesEditor(episodeId) : "";
 
     const statusLine = isOpen && episodeId
@@ -1008,11 +1043,19 @@
     });
   }
 
+  /***********************
+   * Notes editor UI
+   ***********************/
   function renderEpisodeNotesEditor(episodeId) {
     const entry = getEpisodeCacheEntry(episodeId);
-    const notes = Array.isArray(entry?.notes) && entry.notes.length
-      ? entry.notes
-      : [{ timestamp: "00:00:00", text: "" }];
+    const mode = state.episodeNotes.openMode || "append";
+
+    // In "append" mode: show blank draft rows (do NOT mirror saved notes into textarea)
+    // In "edit" mode: draftNotes is populated with saved notes before render
+    const notes =
+      (mode === "edit")
+        ? (Array.isArray(entry?.draftNotes) && entry.draftNotes.length ? entry.draftNotes : [{ timestamp: "00:00:00", text: "" }])
+        : (Array.isArray(entry?.draftNotes) && entry.draftNotes.length ? entry.draftNotes : [{ timestamp: "00:00:00", text: "" }]);
 
     const rowsHtml = notes.map((n, idx) => {
       const ts = escapeHtml(normalizeTimestamp(n?.timestamp));
@@ -1068,14 +1111,14 @@
       const toggleId = t?.getAttribute?.("data-epnote-toggle");
       if (toggleId) {
         e.preventDefault();
-        await toggleEpisodeEditor(toggleId);
+        await toggleEpisodeEditor(toggleId); // 💭 opens APPEND mode
         return;
       }
 
       const editId = t?.getAttribute?.("data-epnote-edit");
       if (editId) {
         e.preventDefault();
-        await openEditorForExistingNotes(editId);
+        await openEditorForExistingNotes(editId); // 📝 opens EDIT mode
         return;
       }
 
@@ -1103,23 +1146,34 @@
     });
   }
 
+  function ensureSavedLoadedMaybe(episodeId) {
+    const entry = getEpisodeCacheEntry(episodeId);
+    if (!entry) return Promise.resolve();
+    if (entry.loadedSaved) return Promise.resolve();
+    return fetchEpisodeNotes(episodeId);
+  }
+
   async function openEditorForExistingNotes(episodeId) {
     if (!episodeId) return;
 
     state.episodeNotes.openEpisodeId = episodeId;
+    state.episodeNotes.openMode = "edit";
+
     const entry = getEpisodeCacheEntry(episodeId);
     renderPodcastColumn();
 
-    if (!entry.loaded) {
-      try {
-        entry.error = null;
-        renderPodcastColumn();
-        await fetchEpisodeNotes(episodeId);
-      } catch (err) {
-        entry.error = String(err?.message || err);
-      }
+    try {
+      entry.error = null;
       renderPodcastColumn();
+      await ensureSavedLoadedMaybe(episodeId);
+
+      // ✅ populate editor with saved notes for editing
+      entry.draftNotes = normalizeNotesArray(entry.savedNotes);
+    } catch (err) {
+      entry.error = String(err?.message || err);
     }
+
+    renderPodcastColumn();
 
     requestAnimationFrame(() => {
       try {
@@ -1133,29 +1187,43 @@
   async function toggleEpisodeEditor(episodeId) {
     if (!episodeId) return;
 
+    // close if same
     if (state.episodeNotes.openEpisodeId === episodeId) {
       state.episodeNotes.openEpisodeId = null;
+      state.episodeNotes.openMode = null;
       renderPodcastColumn();
       return;
     }
 
     state.episodeNotes.openEpisodeId = episodeId;
+    state.episodeNotes.openMode = "append";
 
     const entry = getEpisodeCacheEntry(episodeId);
+
+    // ✅ append mode draft is always blank by default
+    entry.draftNotes = [{ timestamp: "00:00:00", text: "" }];
+
     renderPodcastColumn();
 
-    if (!entry.loaded) {
-      try {
-        entry.error = null;
-        renderPodcastColumn();
-        await fetchEpisodeNotes(episodeId);
-      } catch (err) {
-        entry.error = String(err?.message || err);
-      }
+    // ✅ load saved notes (so the printed block shows the real saved text),
+    // but DO NOT put them into the textbox.
+    try {
+      entry.error = null;
       renderPodcastColumn();
-    } else {
-      renderPodcastColumn();
+      await ensureSavedLoadedMaybe(episodeId);
+    } catch (err) {
+      entry.error = String(err?.message || err);
     }
+
+    renderPodcastColumn();
+
+    requestAnimationFrame(() => {
+      try {
+        const li = document.querySelector(`.podcast-item[data-episode-id="${CSS.escape(episodeId)}"]`);
+        const ta = li?.querySelector(`textarea[data-epnote-text="${CSS.escape(episodeId)}"]`);
+        if (ta) ta.focus();
+      } catch {}
+    });
   }
 
   function addEpisodeRow(episodeId) {
@@ -1163,10 +1231,12 @@
     const entry = getEpisodeCacheEntry(episodeId);
     if (!entry) return;
 
-    if (!Array.isArray(entry.notes)) entry.notes = [];
-    entry.notes.push({ timestamp: "00:00:00", text: "" });
+    if (!Array.isArray(entry.draftNotes)) entry.draftNotes = [];
+    entry.draftNotes.push({ timestamp: "00:00:00", text: "" });
 
     state.episodeNotes.openEpisodeId = episodeId;
+    if (!state.episodeNotes.openMode) state.episodeNotes.openMode = "append";
+
     renderPodcastColumn();
 
     requestAnimationFrame(() => {
@@ -1179,7 +1249,7 @@
     });
   }
 
-  function collectEpisodeNotesFromDom(episodeId) {
+  function collectDraftNotesFromDom(episodeId) {
     const li = document.querySelector(`.podcast-item[data-episode-id="${CSS.escape(episodeId)}"]`);
     if (!li) return [{ timestamp: "00:00:00", text: "" }];
 
@@ -1193,7 +1263,7 @@
       const tx = String(textEls[i]?.value || "").trim();
       out.push({ timestamp: ts, text: tx });
     }
-    return out;
+    return normalizeNotesArray(out);
   }
 
   async function saveEpisodeFromDom(episodeId) {
@@ -1203,12 +1273,23 @@
     if (!entry) return;
     if (entry.saving) return;
 
-    const rows = collectEpisodeNotesFromDom(episodeId);
+    const mode = state.episodeNotes.openMode || "append";
+    const draft = collectDraftNotesFromDom(episodeId);
 
-    entry.notes = rows.map((r) => ({ timestamp: normalizeTimestamp(r.timestamp), text: String(r.text || "") }));
-    entry.loaded = true;
-    entry.error = null;
-    entry.savedAt = null;
+    // Update cache draft
+    entry.draftNotes = draft;
+
+    let finalNotes = [];
+
+    if (mode === "edit") {
+      // overwrite with draft
+      finalNotes = normalizeNotesArray(draft);
+    } else {
+      // append: savedNotes + draftNotes (only meaningful draft lines)
+      const saved = normalizeNotesArray(entry.savedNotes);
+      const draftMeaningful = meaningfulNotes(draft);
+      finalNotes = normalizeNotesArray([...saved, ...draftMeaningful]);
+    }
 
     let authToken = "";
     try {
@@ -1220,12 +1301,17 @@
     }
 
     try {
-      await saveEpisodeNotes(episodeId, rows, authToken);
+      await saveEpisodeNotes(episodeId, finalNotes, authToken);
 
+      // ✅ after save: close editor and reset draft
+      entry.draftNotes = [{ timestamp: "00:00:00", text: "" }];
       state.episodeNotes.openEpisodeId = null;
+      state.episodeNotes.openMode = null;
+
       renderPodcastColumn();
     } catch (err) {
       console.error(err);
+      // keep open on error
       renderPodcastColumn();
     }
   }
@@ -1354,7 +1440,8 @@
         : [];
 
       state.episodeNotes.openEpisodeId = null;
-      state.episodeNotes.episodesWithNotes = new Set(); // clear; repopulate from summary
+      state.episodeNotes.openMode = null;
+      state.episodeNotes.episodesWithNotes = new Set();
 
       await Promise.all([
         loadOthersAndYearSummaryFallback(),
@@ -1369,7 +1456,7 @@
       renderYearSummary();
       renderPodcastColumn();
 
-      // ✅ Start background compute (client-triggered, in case refresh.js waitUntil is unavailable)
+      // background song-hours compute
       const totals = state.snapshot?.totals || {};
       const totalSongs = Number(totals?.songs) || 0;
       const approxMs = Number(totals?.songMsApprox) || 0;
