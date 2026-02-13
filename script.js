@@ -46,7 +46,10 @@
     episodeNotes: {
       // episodeId -> { notes:[{timestamp,text}], loaded:boolean, saving:boolean, savedAt:number|null, error:string|null }
       cache: Object.create(null),
-      openEpisodeId: null
+      openEpisodeId: null,
+
+      // ✅ NEW: episodeIds known to have notes (from summary endpoint)
+      episodesWithNotes: new Set()
     }
   };
 
@@ -468,6 +471,32 @@
     return c[episodeId];
   }
 
+  // ✅ NEW: load a summary list of episodes that have notes (for bubble opacity on refresh)
+  async function loadEpisodeNotesSummary() {
+    try {
+      const res = await fetch(`${API_EPISODE_NOTE}?summary=1`, {
+        method: "GET",
+        headers: { Accept: "application/json" }
+      });
+
+      const text = await res.text();
+      let data = null;
+      try { data = text ? JSON.parse(text) : null; } catch {}
+
+      if (!res.ok) {
+        console.warn("Episode notes summary failed:", res.status, data || text);
+        state.episodeNotes.episodesWithNotes = new Set();
+        return;
+      }
+
+      const ids = Array.isArray(data?.episodesWithNotes) ? data.episodesWithNotes : [];
+      state.episodeNotes.episodesWithNotes = new Set(ids.map(String));
+    } catch (e) {
+      console.warn("Episode notes summary fetch error:", e);
+      state.episodeNotes.episodesWithNotes = new Set();
+    }
+  }
+
   async function fetchEpisodeNotes(episodeId) {
     const entry = getEpisodeCacheEntry(episodeId);
     if (!entry) return null;
@@ -493,6 +522,11 @@
       timestamp: normalizeTimestamp(n?.timestamp),
       text: String(n?.text || "")
     })) : [{ timestamp: "00:00:00", text: "" }];
+
+    // ✅ keep summary Set in sync
+    const hasText = entry.notes.some((n) => String(n?.text || "").trim().length > 0);
+    if (hasText) state.episodeNotes.episodesWithNotes.add(String(episodeId));
+    else state.episodeNotes.episodesWithNotes.delete(String(episodeId));
 
     entry.loaded = true;
     entry.savedAt = null;
@@ -576,10 +610,21 @@
     entry.error = null;
     entry.savedAt = Date.now();
 
+    // ✅ keep summary Set in sync
+    const hasText = entry.notes.some((n) => String(n?.text || "").trim().length > 0);
+    if (hasText) state.episodeNotes.episodesWithNotes.add(String(episodeId));
+    else state.episodeNotes.episodesWithNotes.delete(String(episodeId));
+
     renderPodcastColumn();
   }
 
   function episodeHasNotes(episodeId) {
+    if (!episodeId) return false;
+
+    // ✅ fast-path: known from summary API (works before any user click)
+    if (state.episodeNotes.episodesWithNotes?.has(String(episodeId))) return true;
+
+    // fallback: if loaded into cache, inspect it
     const entry = state.episodeNotes.cache?.[episodeId];
     if (!entry || !Array.isArray(entry.notes)) return false;
     return entry.notes.some((n) => String(n?.text || "").trim().length > 0);
@@ -1074,10 +1119,12 @@
         : [];
 
       state.episodeNotes.openEpisodeId = null;
+      state.episodeNotes.episodesWithNotes = new Set(); // ✅ clear; repopulate from summary
 
       await Promise.all([
         loadOthersAndYearSummaryFallback(),
-        loadPodcastColumn()
+        loadPodcastColumn(),
+        loadEpisodeNotesSummary() // ✅ NEW
       ]);
 
       renderStatistics();
