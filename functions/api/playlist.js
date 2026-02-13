@@ -11,7 +11,14 @@ export async function onRequestPost({ env, request }) {
   try {
     const body = await request.json().catch(() => ({}));
     const playlistId = String(body.playlistId || "").trim();
+
+    // limit here means "how many normalized items to return" (bounded)
+    // We'll page Spotify (max 100 per request) until we hit this.
     const limit = clampInt(body.limit, 0, 500, 200);
+
+    // NEW: offset support (for worker pagination)
+    // offset is the starting Spotify offset for playlist tracks endpoint.
+    const offset = clampInt(body.offset, 0, 1000000, 0);
 
     if (!playlistId) {
       return json({ error: "Missing playlistId" }, 400);
@@ -27,12 +34,15 @@ export async function onRequestPost({ env, request }) {
     const pl = await fetchPlaylist(token, playlistId);
     const playlist = normalizePlaylist(pl, myUserId);
 
-    // Items (optional)
-    const items = limit === 0 ? [] : await fetchPlaylistItemsBounded(token, playlistId, limit);
+    // Items
+    const { items, nextOffset, hasMore } =
+      limit === 0
+        ? { items: [], nextOffset: null, hasMore: false }
+        : await fetchPlaylistItemsBounded(token, playlistId, limit, offset);
+
     let normalizedItems = items.map(normalizeItem).filter(Boolean);
 
     // ✅ ENRICH: playlist-items often omit episode artwork.
-    // If any episodes have null image, fetch details via /v1/episodes?ids=...
     const missingEpIds = normalizedItems
       .filter((x) => x.type === "episode" && !x.image && x.id)
       .map((x) => x.id);
@@ -40,7 +50,6 @@ export async function onRequestPost({ env, request }) {
     if (missingEpIds.length) {
       const eps = await fetchEpisodesByIds(token, missingEpIds);
 
-      // Map episodeId -> best image URL
       const idToImg = new Map(
         (eps || []).map((ep) => [ep?.id, pickFirstImageUrl(ep?.images) || null])
       );
@@ -52,7 +61,17 @@ export async function onRequestPost({ env, request }) {
       });
     }
 
-    return json({ playlist, items: normalizedItems }, 200);
+    return json(
+      {
+        playlist,
+        items: normalizedItems,
+
+        // NEW: worker-friendly paging hints
+        nextOffset,
+        hasMore
+      },
+      200
+    );
   } catch (err) {
     return json(
       {
@@ -76,7 +95,9 @@ async function getUserAccessToken(env) {
   const refreshToken = env.SPOTIFY_REFRESH_TOKEN;
 
   if (!clientId || !clientSecret || !refreshToken) {
-    throw new Error("Missing Spotify OAuth secrets (SPOTIFY_PROFILE, SPOTIFY_KEY, SPOTIFY_REFRESH_TOKEN).");
+    throw new Error(
+      "Missing Spotify OAuth secrets (SPOTIFY_PROFILE, SPOTIFY_KEY, SPOTIFY_REFRESH_TOKEN)."
+    );
   }
 
   const res = await fetch("https://accounts.spotify.com/api/token", {
@@ -93,7 +114,9 @@ async function getUserAccessToken(env) {
 
   const text = await res.text();
   let data = {};
-  try { data = text ? JSON.parse(text) : {}; } catch {}
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {}
 
   if (!res.ok || !data?.access_token) {
     const e = new Error(`Failed to refresh access token (${res.status})`);
@@ -115,7 +138,9 @@ async function fetchJsonOrThrow(url, token, label) {
 
   const text = await res.text();
   let data = null;
-  try { data = text ? JSON.parse(text) : null; } catch {}
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {}
 
   if (!res.ok) {
     const e = new Error(`${label} failed (${res.status})`);
@@ -132,20 +157,62 @@ async function fetchMe(token) {
 }
 
 async function fetchPlaylist(token, playlistId) {
-  return fetchJsonOrThrow(`https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}`, token, "playlist meta");
+  return fetchJsonOrThrow(
+    `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}`,
+    token,
+    "playlist meta"
+  );
 }
 
-async function fetchPlaylistItemsBounded(token, playlistId, maxItems) {
+/**
+ * Fetch up to maxItems starting at startOffset.
+ * Returns raw playlist track objects as Spotify returns them.
+ *
+ * Also returns nextOffset/hasMore to support client-side paging.
+ */
+async function fetchPlaylistItemsBounded(token, playlistId, maxItems, startOffset) {
   let items = [];
-  let next = `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}/tracks?limit=100`;
+  let offset = startOffset;
 
-  while (next && items.length < maxItems) {
-    const data = await fetchJsonOrThrow(next, token, "playlist items");
-    items = items.concat(data.items || []);
-    next = data.next;
+  // Spotify supports limit up to 100 per call for playlist tracks.
+  // We'll request min(100, remaining) until:
+  // - no next page
+  // - we reached maxItems
+  // - Spotify returns fewer than requested (end)
+  let hasMore = true;
+  let nextOffset = null;
+
+  while (hasMore && items.length < maxItems) {
+    const remaining = maxItems - items.length;
+    const pageLimit = Math.min(100, remaining);
+
+    const url =
+      `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}/tracks` +
+      `?limit=${pageLimit}&offset=${offset}`;
+
+    const data = await fetchJsonOrThrow(url, token, "playlist items");
+
+    const pageItems = Array.isArray(data.items) ? data.items : [];
+    items = items.concat(pageItems);
+
+    // Spotify gives next as a URL or null
+    if (data.next) {
+      offset += pageItems.length || pageLimit;
+      hasMore = true;
+      nextOffset = offset;
+    } else {
+      hasMore = false;
+      nextOffset = null;
+    }
+
+    // If Spotify gave us fewer than requested, stop
+    if (pageItems.length < pageLimit) {
+      hasMore = false;
+      nextOffset = null;
+    }
   }
 
-  return items.slice(0, maxItems);
+  return { items, nextOffset, hasMore };
 }
 
 // ✅ Episode enrichment lookup (50 ids per request)
@@ -214,7 +281,6 @@ function normalizeItem(it) {
   }
 
   if (type === "episode") {
-    // Often missing in playlist context; we enrich later via /v1/episodes
     const episodeImage =
       pickFirstImageUrl(obj.images) ||
       pickFirstImageUrl(obj.show?.images) ||
