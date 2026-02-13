@@ -48,7 +48,7 @@
       cache: Object.create(null),
       openEpisodeId: null,
 
-      // ✅ NEW: episodeIds known to have notes (from summary endpoint)
+      // ✅ episodeIds known to have notes (from summary endpoint)
       episodesWithNotes: new Set()
     }
   };
@@ -274,8 +274,27 @@
   }
 
   /***********************
-   * Statistics
+   * Statistics (FIXED songs count)
    ***********************/
+  function computeSongCountFromSnapshot({ includeOthers = false, includeYearSummary = false } = {}) {
+    const sections = state.snapshot?.sections || {};
+    const getList = (k) => Array.isArray(sections?.[k]) ? sections[k] : [];
+
+    const core = [
+      ...getList("dailyMix"),
+      ...getList("top"),
+      ...getList("other")
+    ];
+
+    const sumTracks = (arr) =>
+      arr.reduce((acc, p) => acc + (Number(p?.totalTracks) || 0), 0);
+
+    let sum = sumTracks(core);
+    if (includeOthers) sum += sumTracks(state.others || []);
+    if (includeYearSummary) sum += sumTracks(state.yearSummary || []);
+    return sum;
+  }
+
   function renderStatistics() {
     const grid = document.getElementById("statsGrid");
     if (!grid) return;
@@ -283,7 +302,13 @@
     const totals = state.snapshot?.totals || {};
     const playlists = totals.playlists ?? "–";
 
-    const songs = totals.songs ?? "–";
+    // ✅ compute total songs from playlist metadata (matches what you see in UI cards)
+    const computedSongs = computeSongCountFromSnapshot({
+      includeOthers: false,
+      includeYearSummary: false
+    });
+    const songs = computedSongs > 0 ? computedSongs : (totals.songs ?? "–");
+
     const songHours = typeof totals.songMs === "number" ? fmtHoursFromMs(totals.songMs) : "–";
 
     const podEps = totals.podcastEpisodes ?? "–";
@@ -471,7 +496,7 @@
     return c[episodeId];
   }
 
-  // ✅ NEW: load a summary list of episodes that have notes (for bubble opacity on refresh)
+  // ✅ load a summary list of episodes that have notes (for bubble opacity on refresh)
   async function loadEpisodeNotesSummary() {
     try {
       const res = await fetch(`${API_EPISODE_NOTE}?summary=1`, {
