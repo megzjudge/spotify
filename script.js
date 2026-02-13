@@ -122,6 +122,41 @@
     return "00:00:00";
   }
 
+  // ✅ NEW: shuffle helper (randomise playlists each render)
+  function shuffleArray(arr) {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
+
+  // ✅ NEW: mobile height tuning so ~4 episodes show
+  function tuneMobilePodcastHeight() {
+    const list = document.getElementById("podcastList");
+    const body = list?.closest?.(".col-scroll-body");
+    if (!list || !body) return;
+
+    const isMobile = window.matchMedia("(max-width: 640px)").matches;
+
+    if (!isMobile) {
+      body.style.maxHeight = "";
+      body.style.height = "";
+      list.style.maxHeight = "";
+      list.style.height = "";
+      list.style.overflow = "";
+      return;
+    }
+
+    body.style.maxHeight = "75vh";
+    body.style.height = "75vh";
+
+    list.style.maxHeight = "100%";
+    list.style.height = "100%";
+    list.style.overflow = "auto";
+  }
+
   function blankUntilClick() {
     if (!appMain) return;
     appMain.innerHTML = `
@@ -243,6 +278,9 @@
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape") closeModal();
     });
+
+    // ✅ apply sizing immediately for mobile
+    tuneMobilePodcastHeight();
   }
 
   /***********************
@@ -274,33 +312,20 @@
   }
 
   /***********************
-   * Statistics
+   * Statistics (songs count fixed)
    ***********************/
   function computeSongCountFromSnapshot({ includeOthers = false, includeYearSummary = false } = {}) {
     const sections = state.snapshot?.sections || {};
     const getList = (k) => Array.isArray(sections?.[k]) ? sections[k] : [];
 
-    const core = [
-      ...getList("dailyMix"),
-      ...getList("top"),
-      ...getList("other")
-    ];
+    const core = [...getList("dailyMix"), ...getList("top"), ...getList("other")];
 
-    const sumTracks = (arr) =>
-      arr.reduce((acc, p) => acc + (Number(p?.totalTracks) || 0), 0);
+    const sumTracks = (arr) => arr.reduce((acc, p) => acc + (Number(p?.totalTracks) || 0), 0);
 
     let sum = sumTracks(core);
     if (includeOthers) sum += sumTracks(state.others || []);
     if (includeYearSummary) sum += sumTracks(state.yearSummary || []);
     return sum;
-  }
-
-  // ✅ compute podcast stats from what we actually loaded (avoids refresh-side issues)
-  function computePodcastStatsFromState() {
-    const items = Array.isArray(state.podcast?.items) ? state.podcast.items : [];
-    const episodes = items.length;
-    const ms = items.reduce((acc, it) => acc + (Number(it?.durationMs) || 0), 0);
-    return { episodes, ms };
   }
 
   function renderStatistics() {
@@ -310,19 +335,18 @@
     const totals = state.snapshot?.totals || {};
     const playlists = totals.playlists ?? "–";
 
-    // ✅ compute total songs from playlist metadata (matches UI cards)
+    // ✅ total songs from playlist metadata (matches cards)
     const computedSongs = computeSongCountFromSnapshot({
       includeOthers: false,
       includeYearSummary: false
     });
     const songs = computedSongs > 0 ? computedSongs : (totals.songs ?? "–");
 
+    // hours still from server totals (bounded on server)
     const songHours = typeof totals.songMs === "number" ? fmtHoursFromMs(totals.songMs) : "–";
 
-    const pod = computePodcastStatsFromState();
-    const podEps = pod.episodes > 0 ? pod.episodes : (totals.podcastEpisodes ?? "–");
-    const podHours = pod.episodes > 0 ? fmtHoursFromMs(pod.ms) :
-      (typeof totals.podcastMs === "number" ? fmtHoursFromMs(totals.podcastMs) : "–");
+    const podEps = totals.podcastEpisodes ?? "–";
+    const podHours = typeof totals.podcastMs === "number" ? fmtHoursFromMs(totals.podcastMs) : "–";
 
     grid.innerHTML = `
       <div class="stat-card span-2">
@@ -411,7 +435,11 @@
     if (!cards || !count) return;
 
     const list = getFilteredPlaylists();
-    cards.innerHTML = list.map(cardHtml).join("");
+
+    // ✅ NEW: randomise every time we render playlists
+    const shuffled = shuffleArray(list);
+
+    cards.innerHTML = shuffled.map(cardHtml).join("");
     count.textContent = String(list.length);
     wireCardClicks(cards);
   }
@@ -665,53 +693,13 @@
     return entry.notes.some((n) => String(n?.text || "").trim().length > 0);
   }
 
-  function notesForEpisode(episodeId) {
-    if (!episodeId) return [];
+  function getSavedNotes(episodeId) {
     const entry = state.episodeNotes.cache?.[episodeId];
-    const notes = Array.isArray(entry?.notes) ? entry.notes : [];
-    return notes
-      .map((n) => ({
-        timestamp: normalizeTimestamp(n?.timestamp),
-        text: String(n?.text || "")
-      }))
+    if (!entry || !Array.isArray(entry.notes)) return [];
+    return entry.notes
+      .map((n) => ({ timestamp: normalizeTimestamp(n?.timestamp), text: String(n?.text || "") }))
       .filter((n) => n.timestamp || n.text)
-      .filter((n) => String(n.text || "").trim().length > 0); // show only meaningful text
-  }
-
-  function renderSavedNotesBlock(episodeId) {
-    const notes = notesForEpisode(episodeId);
-    if (!notes.length) return "";
-
-    // NOTE: we render a “printed” version plus an edit emoji that re-opens editor + repopulates
-    const lines = notes.slice(0, 6).map((n) => {
-      const ts = escapeHtml(n.timestamp);
-      const tx = escapeHtml(n.text);
-      return `
-        <div class="epnote-saved-line">
-          <div class="epnote-saved-ts">${ts}</div>
-          <div class="epnote-saved-text">${tx}</div>
-        </div>
-      `;
-    }).join("");
-
-    const more = notes.length > 6 ? `<div class="epnote-saved-more">…and ${notes.length - 6} more</div>` : "";
-
-    return `
-      <div class="epnote-saved" data-epnote-saved="${escapeHtml(episodeId)}">
-        <div class="epnote-saved-head">
-          <div class="epnote-saved-title">Saved notes</div>
-          <button
-            class="epnote-edit"
-            type="button"
-            title="Edit notes"
-            aria-label="Edit notes"
-            data-epnote-edit="${escapeHtml(episodeId)}"
-          >📝</button>
-        </div>
-        ${lines}
-        ${more}
-      </div>
-    `;
+      .filter((n) => String(n.text || "").trim().length > 0);
   }
 
   /***********************
@@ -786,6 +774,7 @@
       errBox.hidden = true;
       empty.style.display = "none";
       list.innerHTML = "";
+      tuneMobilePodcastHeight();
       return;
     }
 
@@ -796,6 +785,7 @@
       errBox.hidden = false;
       errBox.textContent = `Podcast playlist failed to load: ${error}`;
       list.innerHTML = "";
+      tuneMobilePodcastHeight();
       return;
     }
 
@@ -804,6 +794,7 @@
       errBox.hidden = false;
       errBox.textContent = "Podcast playlist data missing.";
       list.innerHTML = "";
+      tuneMobilePodcastHeight();
       return;
     }
 
@@ -819,6 +810,34 @@
 
     // ✅ Fix thumbnails reliably (no inline onerror / CSP-safe)
     wirePodcastThumbFallbacks(list);
+
+    // ✅ NEW: ensure mobile shows ~4 items
+    tuneMobilePodcastHeight();
+  }
+
+  function renderNotesPreview(episodeId) {
+    // show saved notes (if loaded) as read-only preview + edit emoji
+    const saved = getSavedNotes(episodeId);
+    if (!saved.length) return "";
+
+    const lines = saved.slice(0, 3).map((n) => {
+      const ts = escapeHtml(normalizeTimestamp(n.timestamp));
+      const tx = escapeHtml(String(n.text || ""));
+      return `<div class="epnote-preview-line"><span class="epnote-ts">${ts}</span> <span class="epnote-tx">${tx}</span></div>`;
+    }).join("");
+
+    const more = saved.length > 3 ? `<div class="epnote-preview-more">… (${saved.length - 3} more)</div>` : "";
+
+    return `
+      <div class="epnote-preview" data-epnote-preview="${escapeHtml(episodeId)}">
+        <div class="epnote-preview-head">
+          <span class="epnote-preview-label">Notes</span>
+          <button class="epnote-edit" type="button" title="Edit notes" aria-label="Edit notes" data-epnote-edit="${escapeHtml(episodeId)}">✏️</button>
+        </div>
+        ${lines}
+        ${more}
+      </div>
+    `;
   }
 
   // ✅ Thumbnail hardening: remove inline onerror; JS-based fallback
@@ -839,10 +858,8 @@
     const err = entry?.error || null;
     const savedAt = entry?.savedAt || null;
 
-    // ✅ printed saved notes (only when closed)
-    const savedBlock = (!isOpen && hasNotes && episodeId) ? renderSavedNotesBlock(episodeId) : "";
-
     const editorHtml = isOpen && episodeId ? renderEpisodeNotesEditor(episodeId) : "";
+    const previewHtml = (!isOpen && episodeId) ? renderNotesPreview(episodeId) : "";
 
     const statusLine = isOpen && episodeId
       ? `
@@ -884,7 +901,7 @@
           >💭</button>
         </div>
 
-        ${savedBlock}
+        ${previewHtml}
         ${statusLine}
         ${editorHtml}
       </li>
@@ -905,9 +922,7 @@
     });
   }
 
-  /***********************
-   * Notes editor UI (timestamp on one line; textbox under it)
-   ***********************/
+  // ✅ Notes layout change: timestamp line, textbox under it.
   function renderEpisodeNotesEditor(episodeId) {
     const entry = getEpisodeCacheEntry(episodeId);
     const notes = Array.isArray(entry?.notes) && entry.notes.length
@@ -918,8 +933,8 @@
       const ts = escapeHtml(normalizeTimestamp(n?.timestamp));
       const tx = escapeHtml(String(n?.text || ""));
       return `
-        <div class="epnote-row epnote-row-stacked" data-epnote-row="${idx}">
-          <div class="epnote-row-top">
+        <div class="epnote-row" data-epnote-row="${idx}">
+          <div class="epnote-row-top" style="display:flex; gap:10px; align-items:center;">
             <button class="epnote-add" type="button" title="Add row" aria-label="Add row" data-epnote-add="${escapeHtml(episodeId)}">👇🏻</button>
 
             <input
@@ -930,6 +945,7 @@
               value="${ts}"
               placeholder="00:00:00"
               data-epnote-time="${escapeHtml(episodeId)}"
+              style="flex:1; min-width:0;"
             />
 
             <button
@@ -946,6 +962,7 @@
             rows="2"
             placeholder=""
             data-epnote-text="${escapeHtml(episodeId)}"
+            style="width:100%; margin-top:8px;"
           >${tx}</textarea>
         </div>
       `;
@@ -965,18 +982,17 @@
     listEl.addEventListener("click", async (e) => {
       const t = e.target;
 
+      const editId = t?.getAttribute?.("data-epnote-edit");
+      if (editId) {
+        e.preventDefault();
+        await openEditorForEdit(editId);
+        return;
+      }
+
       const toggleId = t?.getAttribute?.("data-epnote-toggle");
       if (toggleId) {
         e.preventDefault();
         await toggleEpisodeEditor(toggleId);
-        return;
-      }
-
-      // ✅ NEW: edit emoji on printed notes block
-      const editId = t?.getAttribute?.("data-epnote-edit");
-      if (editId) {
-        e.preventDefault();
-        await openEditorForExistingNotes(editId);
         return;
       }
 
@@ -1004,14 +1020,14 @@
     });
   }
 
-  async function openEditorForExistingNotes(episodeId) {
+  async function openEditorForEdit(episodeId) {
     if (!episodeId) return;
 
     state.episodeNotes.openEpisodeId = episodeId;
     const entry = getEpisodeCacheEntry(episodeId);
     renderPodcastColumn();
 
-    // Ensure we have saved notes loaded; if not, fetch.
+    // ensure we load saved notes so editor is populated
     if (!entry.loaded) {
       try {
         entry.error = null;
@@ -1022,15 +1038,6 @@
       }
       renderPodcastColumn();
     }
-
-    // Focus first textarea for quick editing
-    requestAnimationFrame(() => {
-      try {
-        const li = document.querySelector(`.podcast-item[data-episode-id="${CSS.escape(episodeId)}"]`);
-        const ta = li?.querySelector(`textarea[data-epnote-text="${CSS.escape(episodeId)}"]`);
-        if (ta) ta.focus();
-      } catch {}
-    });
   }
 
   async function toggleEpisodeEditor(episodeId) {
@@ -1071,15 +1078,6 @@
 
     state.episodeNotes.openEpisodeId = episodeId;
     renderPodcastColumn();
-
-    requestAnimationFrame(() => {
-      try {
-        const li = document.querySelector(`.podcast-item[data-episode-id="${CSS.escape(episodeId)}"]`);
-        const textareas = li?.querySelectorAll(`textarea[data-epnote-text="${CSS.escape(episodeId)}"]`) || [];
-        const last = textareas.length ? textareas[textareas.length - 1] : null;
-        if (last) last.focus();
-      } catch {}
-    });
   }
 
   function collectEpisodeNotesFromDom(episodeId) {
@@ -1108,7 +1106,6 @@
 
     const rows = collectEpisodeNotesFromDom(episodeId);
 
-    // reflect current UI into cache (so the “printed” block matches what you saved)
     entry.notes = rows.map((r) => ({ timestamp: normalizeTimestamp(r.timestamp), text: String(r.text || "") }));
     entry.loaded = true;
     entry.error = null;
@@ -1126,14 +1123,12 @@
     try {
       await saveEpisodeNotes(episodeId, rows, authToken);
 
-      // ✅ UX requested:
-      // - When ✅ is clicked, “print” saved results (we render the saved block)
-      // - and “remove from boxes” (we close the editor so boxes are gone)
+      // ✅ your request: after ✅, remove text from boxes by closing editor,
+      // then show the saved preview + ✏️ edit button.
       state.episodeNotes.openEpisodeId = null;
       renderPodcastColumn();
     } catch (err) {
       console.error(err);
-      // keep editor open on error
       renderPodcastColumn();
     }
   }
@@ -1268,7 +1263,6 @@
         loadEpisodeNotesSummary()
       ]);
 
-      // NOTE: podcast stats rely on state.podcast.items, so render after loadPodcastColumn()
       renderStatistics();
       renderFilterPills();
       renderPlaylists();
@@ -1291,5 +1285,9 @@
   document.addEventListener("DOMContentLoaded", () => {
     blankUntilClick();
     if (refreshButton) refreshButton.addEventListener("click", refreshFromSpotify);
+
+    // ✅ NEW: keep mobile pod height correct on load + resize
+    tuneMobilePodcastHeight();
+    window.addEventListener("resize", tuneMobilePodcastHeight, { passive: true });
   });
 })();
