@@ -3,7 +3,7 @@
 // No server storage. Runs client-side in background thread.
 //
 // Message in:
-//   { playlistIds: string[], throttleMs?: number, limit?: number, includeOthers?: boolean }
+//   { playlistIds: string[], throttleMs?: number, limit?: number }
 // Message out:
 //   { type:"progress", done:number, total:number, playlistId:string, msSoFar:number }
 //   { type:"done", totalMs:number }
@@ -19,12 +19,9 @@ function safeJsonParse(text) {
 }
 
 /**
- * Fetch one page of playlist items.
- * We try a couple common pagination shapes:
- * - body: { playlistId, limit, offset }
- * - response: { items, nextOffset, nextPageOffset, hasMore }
- *
- * If your /api/playlist ignores offset, this still works (we just get one page).
+ * Fetch one page of playlist items (supports offset paging).
+ * Requires /api/playlist to accept { playlistId, limit, offset } and return:
+ *   { items, nextOffset, hasMore }
  */
 async function fetchPlaylistPage({ playlistId, limit, offset }) {
   const res = await fetch(API_PLAYLIST, {
@@ -43,16 +40,8 @@ async function fetchPlaylistPage({ playlistId, limit, offset }) {
 
   const items = Array.isArray(data.items) ? data.items : [];
 
-  // Try to detect pagination signals (optional)
-  const nextOffset =
-    (Number.isFinite(Number(data.nextOffset)) ? Number(data.nextOffset) : null) ??
-    (Number.isFinite(Number(data.nextPageOffset)) ? Number(data.nextPageOffset) : null) ??
-    null;
-
-  const hasMore =
-    (typeof data.hasMore === "boolean" ? data.hasMore : null) ??
-    (typeof data.more === "boolean" ? data.more : null) ??
-    null;
+  const nextOffset = Number.isFinite(Number(data.nextOffset)) ? Number(data.nextOffset) : null;
+  const hasMore = typeof data.hasMore === "boolean" ? data.hasMore : null;
 
   return { items, nextOffset, hasMore };
 }
@@ -68,21 +57,17 @@ function sumTrackMs(items) {
 
 /**
  * Compute total duration for a playlist (tracks only).
- * If API supports paging, we'll keep fetching until exhausted.
+ * Pages until exhausted (or safety stop).
  */
 async function fetchPlaylistDurationMs(playlistId, { limit = 200 } = {}) {
   let totalMs = 0;
 
-  // Defensive: if your API doesn't support offset paging, this will still just run once.
   let offset = 0;
   let safetyPages = 0;
 
   while (true) {
     safetyPages++;
-    if (safetyPages > 200) {
-      // hard stop to avoid infinite loops if API returns weird pagination
-      break;
-    }
+    if (safetyPages > 400) break; // hard stop
 
     const { items, nextOffset, hasMore } = await fetchPlaylistPage({
       playlistId,
@@ -92,13 +77,12 @@ async function fetchPlaylistDurationMs(playlistId, { limit = 200 } = {}) {
 
     totalMs += sumTrackMs(items);
 
-    // Decide whether to keep paging
-    const gotFullPage = items.length >= limit;
-
-    // Priority order:
+    // Decide whether to keep paging:
     // 1) explicit hasMore
     // 2) explicit nextOffset
     // 3) heuristic: full page implies maybe more
+    const gotFullPage = items.length >= limit;
+
     if (hasMore === true) {
       offset = (nextOffset !== null) ? nextOffset : (offset + limit);
       continue;
@@ -114,7 +98,6 @@ async function fetchPlaylistDurationMs(playlistId, { limit = 200 } = {}) {
       continue;
     }
 
-    // otherwise, we're done
     break;
   }
 
@@ -124,11 +107,14 @@ async function fetchPlaylistDurationMs(playlistId, { limit = 200 } = {}) {
 self.onmessage = async (e) => {
   const msg = e.data || {};
   const playlistIds = Array.isArray(msg.playlistIds) ? msg.playlistIds : [];
+
   const throttleMs = Number(msg.throttleMs);
   const throttle = Number.isFinite(throttleMs) ? Math.max(0, throttleMs) : 120;
 
   const limitIn = Number(msg.limit);
-  const limit = Number.isFinite(limitIn) ? Math.min(400, Math.max(50, Math.floor(limitIn))) : 200;
+  const limit = Number.isFinite(limitIn)
+    ? Math.min(200, Math.max(25, Math.floor(limitIn))) // keep under Spotify page size (100) * 2; your API will clamp anyway
+    : 100;
 
   try {
     let totalMs = 0;
@@ -137,7 +123,6 @@ self.onmessage = async (e) => {
       const id = String(playlistIds[i] || "").trim();
       if (!id) continue;
 
-      // progress update (before work)
       self.postMessage({
         type: "progress",
         done: i,
@@ -146,15 +131,14 @@ self.onmessage = async (e) => {
         msSoFar: totalMs
       });
 
-      // retry once on transient errors
       try {
         totalMs += await fetchPlaylistDurationMs(id, { limit });
       } catch (err) {
+        // retry once
         await sleep(500);
         totalMs += await fetchPlaylistDurationMs(id, { limit });
       }
 
-      // gentle throttle to reduce rate-limit pain
       if (throttle) await sleep(throttle);
     }
 
