@@ -1,4 +1,3 @@
-// script.js
 (() => {
   /***********************
    * CONFIG
@@ -6,14 +5,6 @@
   const API_REFRESH = "/api/refresh";
   const API_PLAYLIST = "/api/playlist";
   const API_EPISODE_NOTE = "/api/episode-note";
-
-  // ✅ NEW (Option A): compute accurate Total Song Hrs without blowing subrequests
-  const API_PLAYLIST_DURATION = "/api/playlist-duration";
-
-  // ✅ NEW: hide playlists by ID (client-side; server-side hide is still recommended too)
-  const HIDE_PLAYLIST_IDS = new Set([
-    // "PUT_PLAYLIST_ID_HERE",
-  ]);
 
   const PODCAST_PLAYLIST_ID = "2tHrihmpYzDbJ8rit7HtFR";
 
@@ -50,14 +41,6 @@
     others: [],
     yearSummary: [],
     podcast: { tried: false, error: null, playlist: null, items: [] },
-
-    // ✅ NEW: song hours computed client-side (Option A)
-    songHours: {
-      computedMs: null,        // number | null
-      computedAt: null,        // ms timestamp | null
-      computing: false,
-      error: null
-    },
 
     // Episode notes (GitHub-backed)
     episodeNotes: {
@@ -291,7 +274,7 @@
   }
 
   /***********************
-   * Statistics (songs count + song hrs placeholder)
+   * Statistics (FIXED songs count)
    ***********************/
   function computeSongCountFromSnapshot({ includeOthers = false, includeYearSummary = false } = {}) {
     const sections = state.snapshot?.sections || {};
@@ -312,17 +295,12 @@
     return sum;
   }
 
-  function setStatValue(kickerText, valueText) {
-    const cards = [...document.querySelectorAll("#statsGrid .stat-card")];
-    for (const c of cards) {
-      const k = c.querySelector(".stat-kicker")?.textContent?.trim() || "";
-      if (k.toLowerCase() === String(kickerText).toLowerCase()) {
-        const v = c.querySelector(".stat-big");
-        if (v) v.textContent = String(valueText);
-        return true;
-      }
-    }
-    return false;
+  // ✅ NEW: compute podcast stats from state.podcast.items (what we actually loaded)
+  function computePodcastStatsFromState() {
+    const items = Array.isArray(state.podcast?.items) ? state.podcast.items : [];
+    const episodes = items.length;
+    const ms = items.reduce((acc, it) => acc + (Number(it?.durationMs) || 0), 0);
+    return { episodes, ms };
   }
 
   function renderStatistics() {
@@ -339,14 +317,21 @@
     });
     const songs = computedSongs > 0 ? computedSongs : (totals.songs ?? "–");
 
-    // ✅ Option A: /api/refresh may return songMs null; we fill later client-side
-    const songHours =
-      typeof state.songHours.computedMs === "number"
-        ? fmtHoursFromMs(state.songHours.computedMs)
-        : (typeof totals.songMs === "number" ? fmtHoursFromMs(totals.songMs) : "…");
+    const songHours = typeof totals.songMs === "number" ? fmtHoursFromMs(totals.songMs) : "–";
 
-    const podEps = totals.podcastEpisodes ?? "–";
-    const podHours = typeof totals.podcastMs === "number" ? fmtHoursFromMs(totals.podcastMs) : "–";
+    // ✅ Prefer podcast stats from loaded podcast column (more reliable than /api/refresh)
+    const podFromState = computePodcastStatsFromState();
+    const podEps =
+      podFromState.episodes > 0
+        ? podFromState.episodes
+        : (totals.podcastEpisodes ?? "–");
+
+    const podMs =
+      podFromState.episodes > 0
+        ? podFromState.ms
+        : (typeof totals.podcastMs === "number" ? totals.podcastMs : null);
+
+    const podHours = (podMs != null) ? fmtHoursFromMs(podMs) : "–";
 
     grid.innerHTML = `
       <div class="stat-card span-2">
@@ -377,7 +362,7 @@
   }
 
   /***********************
-   * Filters + playlists (with HIDE_PLAYLIST_IDS)
+   * Filters + playlists
    ***********************/
   function getSection(name) {
     const sections = state.snapshot?.sections || {};
@@ -385,15 +370,10 @@
     return Array.isArray(list) ? list : [];
   }
 
-  function applyHiddenFilter(list) {
-    if (!Array.isArray(list) || !HIDE_PLAYLIST_IDS.size) return list || [];
-    return list.filter(p => p?.id && !HIDE_PLAYLIST_IDS.has(String(p.id)));
-  }
-
   function getFilteredPlaylists() {
-    const dailyMix = applyHiddenFilter(getSection("dailyMix"));
-    const top = applyHiddenFilter(getSection("top"));
-    const other = applyHiddenFilter(getSection("other"));
+    const dailyMix = getSection("dailyMix");
+    const top = getSection("top");
+    const other = getSection("other");
 
     if (state.filter === "dailyMix") return dailyMix;
     if (state.filter === "top") return top;
@@ -411,9 +391,9 @@
     const pills = document.getElementById("filterPills");
     if (!pills) return;
 
-    const dailyMix = applyHiddenFilter(getSection("dailyMix"));
-    const top = applyHiddenFilter(getSection("top"));
-    const other = applyHiddenFilter(getSection("other"));
+    const dailyMix = getSection("dailyMix");
+    const top = getSection("top");
+    const other = getSection("other");
     const allCount = dailyMix.length + top.length + other.length;
 
     const pill = (key, label, count) => `
@@ -443,94 +423,6 @@
     cards.innerHTML = list.map(cardHtml).join("");
     count.textContent = String(list.length);
     wireCardClicks(cards);
-  }
-
-  /***********************
-   * Song Hours (Option A): client-side accurate via /api/playlist-duration
-   ***********************/
-  function getAllCorePlaylistIdsForHours() {
-    // We compute hours across ALL core playlists (dailyMix + top + other), not just current filter.
-    const dailyMix = applyHiddenFilter(getSection("dailyMix"));
-    const top = applyHiddenFilter(getSection("top"));
-    const other = applyHiddenFilter(getSection("other"));
-    const all = [...dailyMix, ...top, ...other];
-
-    const ids = all
-      .map(p => String(p?.id || "").trim())
-      .filter(Boolean);
-
-    // de-dupe
-    return [...new Set(ids)];
-  }
-
-  async function computeTotalSongHours() {
-    if (state.songHours.computing) return;
-    state.songHours.computing = true;
-    state.songHours.error = null;
-    state.songHours.computedMs = null;
-    state.songHours.computedAt = null;
-
-    // show placeholder
-    setStatValue("Total Song Hrs", "…");
-
-    const ids = getAllCorePlaylistIdsForHours();
-    if (!ids.length) {
-      state.songHours.computing = false;
-      setStatValue("Total Song Hrs", "–");
-      return;
-    }
-
-    let totalMs = 0;
-    let okCount = 0;
-
-    try {
-      for (let i = 0; i < ids.length; i++) {
-        const id = ids[i];
-        setStatus(`Computing song hours… ${i + 1}/${ids.length}`);
-
-        const res = await fetch(API_PLAYLIST_DURATION, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Accept: "application/json" },
-          body: JSON.stringify({ playlistId: id })
-        });
-
-        const text = await res.text();
-        let j = null;
-        try { j = text ? JSON.parse(text) : null; } catch {}
-
-        if (!res.ok) {
-          console.warn("playlist-duration failed:", id, res.status, j || text);
-          continue;
-        }
-
-        const ms = Number(j?.totalMs);
-        if (Number.isFinite(ms)) {
-          totalMs += ms;
-          okCount += 1;
-        }
-      }
-
-      state.songHours.computedMs = totalMs;
-      state.songHours.computedAt = Date.now();
-
-      // show final value
-      setStatValue("Total Song Hrs", fmtHoursFromMs(totalMs));
-
-      // optional log
-      console.log("[songHours] computed", {
-        playlists: ids.length,
-        okCount,
-        totalMs,
-        hours: totalMs / 3600000
-      });
-    } catch (e) {
-      state.songHours.error = String(e?.message || e);
-      console.warn("[songHours] compute failed:", e);
-      setStatValue("Total Song Hrs", "ERR");
-    } finally {
-      state.songHours.computing = false;
-      setStatus("");
-    }
   }
 
   /***********************
@@ -587,10 +479,8 @@
     const el = document.getElementById("othersCards");
     if (!el) return;
 
-    const visible = applyHiddenFilter(state.others || []);
-
-    el.innerHTML = visible.length
-      ? visible.map(cardHtml).join("")
+    el.innerHTML = state.others.length
+      ? state.others.map(cardHtml).join("")
       : `<div class="muted-small">No “others” playlists added.</div>`;
 
     wireCardClicks(el);
@@ -600,10 +490,8 @@
     const el = document.getElementById("yearSummaryCards");
     if (!el) return;
 
-    const visible = applyHiddenFilter(state.yearSummary || []);
-
-    el.innerHTML = visible.length
-      ? visible.map(cardHtml).join("")
+    el.innerHTML = state.yearSummary.length
+      ? state.yearSummary.map(cardHtml).join("")
       : `<div class="muted-small">No year summary playlist added yet.</div>`;
 
     wireCardClicks(el);
@@ -1275,13 +1163,7 @@
         : [];
 
       state.episodeNotes.openEpisodeId = null;
-      state.episodeNotes.episodesWithNotes = new Set(); // clear; repopulate from summary
-
-      // reset song hours computed state on each refresh
-      state.songHours.computedMs = null;
-      state.songHours.computedAt = null;
-      state.songHours.error = null;
-      state.songHours.computing = false;
+      state.episodeNotes.episodesWithNotes = new Set(); // ✅ clear; repopulate from summary
 
       await Promise.all([
         loadOthersAndYearSummaryFallback(),
@@ -1289,17 +1171,13 @@
         loadEpisodeNotesSummary()
       ]);
 
-      // render UI immediately (fast)
+      // ✅ After podcast loads, stats will reflect state.podcast.items
       renderStatistics();
       renderFilterPills();
       renderPlaylists();
       renderOthers();
       renderYearSummary();
       renderPodcastColumn();
-
-      // ✅ Option A: compute accurate song hours AFTER render (sequential per playlist)
-      // (does not affect refresh stability; can take some seconds)
-      await computeTotalSongHours();
 
       setStatus("");
     } catch (err) {
