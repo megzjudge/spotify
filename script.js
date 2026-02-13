@@ -1,3 +1,5 @@
+// script.js
+
 (() => {
   /***********************
    * CONFIG
@@ -5,6 +7,9 @@
   const API_REFRESH = "/api/refresh";
   const API_PLAYLIST = "/api/playlist";
   const API_EPISODE_NOTE = "/api/episode-note";
+
+  // ✅ NEW
+  const API_SONG_HOURS = "/api/song-hours";
 
   const PODCAST_PLAYLIST_ID = "2tHrihmpYzDbJ8rit7HtFR";
 
@@ -41,6 +46,12 @@
     others: [],
     yearSummary: [],
     podcast: { tried: false, error: null, playlist: null, items: [] },
+
+    // ✅ song-hours polling
+    songHours: {
+      pollTimer: null,
+      tries: 0
+    },
 
     // Episode notes (GitHub-backed)
     episodeNotes: {
@@ -303,6 +314,22 @@
     return { episodes, ms };
   }
 
+  function getSongHoursDisplay(totals) {
+    const exact = totals?.songMsExact;
+    const approx = totals?.songMsApprox;
+    const status = String(totals?.songHoursStatus || "");
+
+    if (typeof exact === "number") return { label: fmtHoursFromMs(exact), hint: "" };
+
+    if (typeof approx === "number") {
+      const approxLabel = `~${fmtHoursFromMs(approx)}`;
+      const hint = status === "computing" ? " (computing…)" : "";
+      return { label: approxLabel, hint };
+    }
+
+    return { label: "–", hint: "" };
+  }
+
   function renderStatistics() {
     const grid = document.getElementById("statsGrid");
     if (!grid) return;
@@ -317,7 +344,8 @@
     });
     const songs = computedSongs > 0 ? computedSongs : (totals.songs ?? "–");
 
-    const songHours = typeof totals.songMs === "number" ? fmtHoursFromMs(totals.songMs) : "–";
+    // ✅ NEW: exact->approx fallback
+    const songHours = getSongHoursDisplay(totals);
 
     const pod = computePodcastStatsFromState();
     const podEps = pod.episodes > 0 ? pod.episodes : (totals.podcastEpisodes ?? "–");
@@ -337,7 +365,7 @@
 
       <div class="stat-card">
         <div class="stat-kicker">Total Song Hrs</div>
-        <div class="stat-big">${escapeHtml(String(songHours))}</div>
+        <div class="stat-big">${escapeHtml(String(songHours.label))}${escapeHtml(songHours.hint)}</div>
       </div>
 
       <div class="stat-card">
@@ -350,6 +378,87 @@
         <div class="stat-big">${escapeHtml(String(podHours))}</div>
       </div>
     `;
+  }
+
+  /***********************
+   * Song-hours: start compute + poll for exact
+   ***********************/
+  function stopSongHoursPolling() {
+    if (state.songHours.pollTimer) {
+      clearInterval(state.songHours.pollTimer);
+      state.songHours.pollTimer = null;
+    }
+    state.songHours.tries = 0;
+  }
+
+  async function kickSongHoursCompute(totalSongs, approxMs) {
+    // Trigger compute (your song-hours.js should treat this as "start job if needed")
+    try {
+      await fetch(API_SONG_HOURS, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({
+          totalSongs: Number(totalSongs) || 0,
+          approxMs: Number(approxMs) || 0,
+          avgMinutesPerSong: 3
+        })
+      });
+    } catch {
+      // ignore
+    }
+  }
+
+  function startSongHoursPolling() {
+    stopSongHoursPolling();
+
+    const totals = state.snapshot?.totals || {};
+    if (typeof totals.songMsExact === "number") return;
+
+    // Mark as computing in UI if we have approx
+    if (typeof totals.songMsApprox === "number") {
+      totals.songHoursStatus = "computing";
+      renderStatistics();
+    }
+
+    state.songHours.pollTimer = setInterval(async () => {
+      state.songHours.tries++;
+      if (state.songHours.tries > 45) { // ~90s @ 2s interval
+        stopSongHoursPolling();
+        return;
+      }
+
+      try {
+        const res = await fetch(API_SONG_HOURS, { method: "GET", headers: { Accept: "application/json" } });
+        const text = await res.text();
+        let data = null;
+        try { data = text ? JSON.parse(text) : null; } catch {}
+
+        if (!res.ok || !data) return;
+
+        const exactMs =
+          (typeof data.exactMs === "number") ? data.exactMs :
+          (typeof data.ms === "number") ? data.ms :
+          null;
+
+        if (typeof exactMs === "number") {
+          // overwrite snapshot totals and re-render
+          state.snapshot.totals.songMsExact = exactMs;
+          state.snapshot.totals.songMsExactUpdatedAt = data.updatedAt ?? null;
+          state.snapshot.totals.songHoursStatus = "exact";
+          state.snapshot.totals.songMs = exactMs; // backward compat
+          renderStatistics();
+          stopSongHoursPolling();
+          return;
+        }
+
+        // keep hint in sync if endpoint exposes running
+        if (data.running === true || data.running === "1") {
+          if (state.snapshot?.totals) state.snapshot.totals.songHoursStatus = "computing";
+        }
+      } catch {
+        // ignore
+      }
+    }, 2000);
   }
 
   /***********************
@@ -682,7 +791,6 @@
     const notes = notesForEpisode(episodeId);
     if (!notes.length) return "";
 
-    // NOTE: we render a “printed” version plus an edit emoji that re-opens editor + repopulates
     const lines = notes.slice(0, 6).map((n) => {
       const ts = escapeHtml(n.timestamp);
       const tx = escapeHtml(n.text);
@@ -816,12 +924,9 @@
 
     list.innerHTML = items.map(renderPodcastItem).join("");
     wirePodcastInteractions(list);
-
-    // ✅ Fix thumbnails reliably (no inline onerror / CSP-safe)
     wirePodcastThumbFallbacks(list);
   }
 
-  // ✅ Thumbnail hardening: remove inline onerror; JS-based fallback
   function renderPodcastItem(it) {
     const episodeId = String(it?.id || "").trim();
     const epImg = it.image || "https://spotify.jdge.cc/images/spotify_logo.png";
@@ -839,9 +944,7 @@
     const err = entry?.error || null;
     const savedAt = entry?.savedAt || null;
 
-    // ✅ printed saved notes (only when closed)
     const savedBlock = (!isOpen && hasNotes && episodeId) ? renderSavedNotesBlock(episodeId) : "";
-
     const editorHtml = isOpen && episodeId ? renderEpisodeNotesEditor(episodeId) : "";
 
     const statusLine = isOpen && episodeId
@@ -905,9 +1008,6 @@
     });
   }
 
-  /***********************
-   * Notes editor UI (timestamp on one line; textbox under it)
-   ***********************/
   function renderEpisodeNotesEditor(episodeId) {
     const entry = getEpisodeCacheEntry(episodeId);
     const notes = Array.isArray(entry?.notes) && entry.notes.length
@@ -972,7 +1072,6 @@
         return;
       }
 
-      // ✅ NEW: edit emoji on printed notes block
       const editId = t?.getAttribute?.("data-epnote-edit");
       if (editId) {
         e.preventDefault();
@@ -1011,7 +1110,6 @@
     const entry = getEpisodeCacheEntry(episodeId);
     renderPodcastColumn();
 
-    // Ensure we have saved notes loaded; if not, fetch.
     if (!entry.loaded) {
       try {
         entry.error = null;
@@ -1023,7 +1121,6 @@
       renderPodcastColumn();
     }
 
-    // Focus first textarea for quick editing
     requestAnimationFrame(() => {
       try {
         const li = document.querySelector(`.podcast-item[data-episode-id="${CSS.escape(episodeId)}"]`);
@@ -1108,7 +1205,6 @@
 
     const rows = collectEpisodeNotesFromDom(episodeId);
 
-    // reflect current UI into cache (so the “printed” block matches what you saved)
     entry.notes = rows.map((r) => ({ timestamp: normalizeTimestamp(r.timestamp), text: String(r.text || "") }));
     entry.loaded = true;
     entry.error = null;
@@ -1126,14 +1222,10 @@
     try {
       await saveEpisodeNotes(episodeId, rows, authToken);
 
-      // ✅ UX requested:
-      // - When ✅ is clicked, “print” saved results (we render the saved block)
-      // - and “remove from boxes” (we close the editor so boxes are gone)
       state.episodeNotes.openEpisodeId = null;
       renderPodcastColumn();
     } catch (err) {
       console.error(err);
-      // keep editor open on error
       renderPodcastColumn();
     }
   }
@@ -1231,6 +1323,8 @@
    * Refresh
    ***********************/
   async function refreshFromSpotify() {
+    stopSongHoursPolling();
+
     buildShell();
     setButtonLoading(true);
     setStatus("Refreshing from Spotify…");
@@ -1268,13 +1362,22 @@
         loadEpisodeNotesSummary()
       ]);
 
-      // NOTE: podcast stats rely on state.podcast.items, so render after loadPodcastColumn()
       renderStatistics();
       renderFilterPills();
       renderPlaylists();
       renderOthers();
       renderYearSummary();
       renderPodcastColumn();
+
+      // ✅ Start background compute (client-triggered, in case refresh.js waitUntil is unavailable)
+      const totals = state.snapshot?.totals || {};
+      const totalSongs = Number(totals?.songs) || 0;
+      const approxMs = Number(totals?.songMsApprox) || 0;
+
+      if (totalSongs > 0 && typeof totals.songMsExact !== "number") {
+        kickSongHoursCompute(totalSongs, approxMs);
+        startSongHoursPolling();
+      }
 
       setStatus("");
     } catch (err) {
