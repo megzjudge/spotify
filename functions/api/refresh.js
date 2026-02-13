@@ -24,14 +24,12 @@ export async function onRequestPost({ env, request }) {
       "37i9dQZF1EQnsJ0xmvpihE"
     ];
 
+    // ✅ NEW: hide playlists by ID (client can also hide, but server-side keeps it out everywhere)
+    const HIDE_PLAYLIST_IDS = new Set([
+      // "PUT_PLAYLIST_ID_HERE",
+    ]);
+
     const MAX_PLAYLISTS = clampInt(body?.maxPlaylists, 1, 200, 120);
-
-    // ✅ This still exists, but now ONLY used for lightweight/bounded calls if you want them later.
-    // Metrics use full pagination (see HARD_CAP_ITEMS_PER_PLAYLIST).
-    const MAX_TRACKS_PER_PLAYLIST = clampInt(body?.maxTracksPerPlaylist, 1, 500, 250);
-
-    // ✅ Safety cap for *full* pagination in metrics (prevents runaway)
-    const HARD_CAP_ITEMS_PER_PLAYLIST = clampInt(body?.hardCapItemsPerPlaylist, 500, 20000, 10000);
 
     const NOT_PUBLIC_PREFIXES = ["NP:", "[Not Public]"];
     const NOT_PUBLIC_TAG = "#notpublic";
@@ -68,9 +66,14 @@ export async function onRequestPost({ env, request }) {
      ***********************/
     const filtered = playlistsRaw.filter(p => {
       if (!p?.id) return false;
+
+      // ✅ hard hide
+      if (HIDE_PLAYLIST_IDS.has(p.id)) return false;
+
+      // keep allowlisted playlists even if not "mine"
       if (ALLOWLIST_IDS.has(p.id)) return true;
 
-      // Keep only your public playlists (same as your current rules)
+      // Keep only your public playlists
       if (p.owner?.id !== myUserId) return false;
       if (p.public === false) return false;
 
@@ -134,91 +137,22 @@ export async function onRequestPost({ env, request }) {
     );
 
     /***********************
-     * METRICS (✅ FIXED: FULL PAGINATION for durations)
+     * METRICS (lightweight)
+     *
+     * ✅ totals.songs is computed from playlist metadata totals (fast)
+     * ❗ totals.songMs is intentionally null — computed client-side via /api/playlist-duration
      ***********************/
-    const seenSongKeys = new Set();
-    let totalSongs = 0;
-    let totalSongMs = 0;
+    const totalSongs = normal.reduce((acc, p) => acc + (Number(p.totalTracks) || 0), 0);
 
-    function songKeyFromTrack(obj) {
-      // Prefer stable track id. Fallback for local/null ids.
-      const id = obj?.id ? String(obj.id) : "";
-      if (id) return `id:${id}`;
-
-      const name = String(obj?.name || "").trim().toLowerCase();
-      const artists = Array.isArray(obj?.artists)
-        ? obj.artists.map(a => String(a?.name || "").trim().toLowerCase()).filter(Boolean).join("|")
-        : "";
-      const ms = Number(obj?.duration_ms) || 0;
-
-      return `local:${name}::${artists}::${ms}`;
-    }
-
-    // ✅ Fetch ALL items for song metrics (bounded only by HARD_CAP_ITEMS_PER_PLAYLIST)
-    for (const p of normal) {
-      const items = await fetchPlaylistItemsAll(
-        accessToken,
-        p.id,
-        HARD_CAP_ITEMS_PER_PLAYLIST
-      );
-
-      for (const it of items) {
-        const obj = it?.track;
-        if (!obj || obj.type !== "track") continue;
-
-        const ms = Number(obj.duration_ms);
-        if (!Number.isFinite(ms)) continue;
-
-        const key = songKeyFromTrack(obj);
-        if (seenSongKeys.has(key)) continue;
-
-        seenSongKeys.add(key);
-        totalSongs += 1;
-        totalSongMs += ms;
-      }
-    }
-
-    // Podcast metrics (also full pagination, bounded by HARD_CAP_ITEMS_PER_PLAYLIST)
-    const seenEpKeys = new Set();
-    let podcastEpisodes = 0;
-    let podcastMs = 0;
-
-    if (podcastPlaylist) {
-      const items = await fetchPlaylistItemsAll(
-        accessToken,
-        podcastPlaylist.id,
-        HARD_CAP_ITEMS_PER_PLAYLIST
-      );
-
-      for (const it of items) {
-        const obj = it?.track;
-        if (!obj || obj.type !== "episode") continue;
-
-        const ms = Number(obj.duration_ms);
-        if (!Number.isFinite(ms)) continue;
-
-        const id = obj?.id ? String(obj.id) : "";
-        const key = id ? `id:${id}` : `local:${String(obj?.name || "").trim().toLowerCase()}::${ms}`;
-        if (seenEpKeys.has(key)) continue;
-
-        seenEpKeys.add(key);
-        podcastEpisodes += 1;
-        podcastMs += ms;
-      }
-    }
-
-    /***********************
-     * RESPONSE
-     ***********************/
     const resp = {
       lastUpdated: new Date().toISOString(),
 
       totals: {
         playlists: normal.length,
         songs: totalSongs,
-        songMs: totalSongMs,
-        podcastEpisodes,
-        podcastMs
+        songMs: null,              // ✅ computed client-side
+        podcastEpisodes: null,     // optional: same treatment later
+        podcastMs: null
       },
 
       sections: { dailyMix, top, other },
@@ -232,8 +166,7 @@ export async function onRequestPost({ env, request }) {
         fetchedPlaylists: playlistsRaw.length,
         filteredPlaylists: normalized.length,
         yearSummaryMatched: yearSummaryPlaylists.map(p => ({ id: p.id, name: p.name })),
-        uniqueSongKeys: seenSongKeys.size,
-        hardCapItemsPerPlaylist: HARD_CAP_ITEMS_PER_PLAYLIST
+        hideIdsCount: HIDE_PLAYLIST_IDS.size
       };
     }
 
@@ -300,58 +233,6 @@ async function fetchMyPlaylists(token, limit) {
     next = d.next;
   }
   return out.slice(0, limit);
-}
-
-// Old bounded helper (kept, in case you still want it elsewhere)
-async function fetchPlaylistItemsBounded(token, playlistId, max) {
-  let out = [];
-  let next = `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}/tracks?limit=100`;
-  while (next && out.length < max) {
-    const r = await fetch(next, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    const d = await r.json().catch(() => ({}));
-    out.push(...(d.items || []));
-    next = d.next;
-  }
-  return out.slice(0, max);
-}
-
-// ✅ NEW: full pagination for metrics (with hard safety cap + reduced fields payload)
-async function fetchPlaylistItemsAll(token, playlistId, hardCap) {
-  let out = [];
-  let offset = 0;
-
-  // Reduce payload size to what metrics need
-  const FIELDS = "items(track(id,name,type,duration_ms,artists(name))),next";
-
-  while (out.length < hardCap) {
-    const url =
-      `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}/tracks` +
-      `?limit=100&offset=${offset}&fields=${encodeURIComponent(FIELDS)}`;
-
-    const r = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-
-    if (!r.ok) {
-      const txt = await r.text().catch(() => "");
-      throw new Error(`Failed playlist items fetch (${playlistId}) HTTP ${r.status}: ${txt.slice(0, 180)}`);
-    }
-
-    const d = await r.json().catch(() => ({}));
-    const items = Array.isArray(d?.items) ? d.items : [];
-
-    out.push(...items);
-
-    // Spotify will return fewer than limit when exhausted
-    if (!items.length || !d?.next) break;
-
-    offset += items.length;
-    if (items.length < 100) break;
-  }
-
-  return out.slice(0, hardCap);
 }
 
 function normalizePlaylistMeta(p, myUserId) {
