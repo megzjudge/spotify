@@ -508,7 +508,9 @@ main {
   border: 1px solid var(--stroke);
   background: rgba(0,0,0,0.18);
   border-radius: var(--radius-md);
-  overflow: hidden;
+
+  /* ✅ CHANGED: allow textarea to resize without getting clipped */
+  overflow: visible;
 }
 
 /* ✅ FIX: prevent <li> collapsing to 2px in flex column */
@@ -670,7 +672,19 @@ main {
   padding: 8px 10px;
   font-size: 13px;
   line-height: 1.35;
-  resize: vertical;
+
+  /* ✅ CHANGED: allow extendable width + height */
+  resize: both;
+
+  /* ✅ keep it from breaking the card width */
+  max-width: 100%;
+
+  /* ✅ prevent it getting too tiny */
+  min-width: 220px;
+
+  /* ✅ when resized smaller, allow scrolling */
+  overflow: auto;
+
   outline: none;
 }
 
