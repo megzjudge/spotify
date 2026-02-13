@@ -111,12 +111,22 @@ async function fetchMe(token) {
 }
 
 async function fetchPlaylist(token, playlistId) {
-  return fetchJsonOrThrow(`https://api.spotify.com/v1/playlists/${playlistId}`, token, "playlist meta");
+  return fetchJsonOrThrow(`https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}`, token, "playlist meta");
 }
 
+/**
+ * ✅ FIX: Spotify sometimes omits episode images in playlist-items responses unless you request them.
+ * We force the response to include:
+ * - track.images (episodes can expose images here)
+ * - track.show.images (often where show/episode artwork lives)
+ * - album.images (for normal tracks)
+ */
 async function fetchPlaylistItemsBounded(token, playlistId, maxItems) {
   let items = [];
-  let next = `https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=100`;
+
+  let next =
+    `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}/tracks?limit=100` +
+    `&fields=items(added_at,track(id,name,type,duration_ms,external_urls,artists(name),album(images),images,show(name,images))),next`;
 
   while (next && items.length < maxItems) {
     const data = await fetchJsonOrThrow(next, token, "playlist items");
@@ -177,7 +187,7 @@ function normalizeItem(it) {
   }
 
   if (type === "episode") {
-    // ✅ FIX: episode artwork can be in obj.images OR obj.show.images depending on endpoint/fields
+    // ✅ Episode artwork can be in obj.images OR obj.show.images depending on endpoint/fields
     const episodeImage =
       pickFirstImageUrl(obj.images) ||
       pickFirstImageUrl(obj.show?.images) ||
