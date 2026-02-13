@@ -259,7 +259,6 @@ main {
   border-bottom: 1px solid var(--stroke);
 }
 
-/* Let the playlists block expand + scroll internally */
 .subpanel-flex {
   display: flex;
   flex-direction: column;
@@ -298,13 +297,22 @@ main {
   text-transform: uppercase;
   letter-spacing: 0.12em;
   margin-bottom: 6px;
-  white-space: nowrap; /* keep single line */
+  white-space: nowrap;
 }
 
 .stat-big {
   font-size: 26px;
   font-weight: 800;
   line-height: 1.05;
+}
+
+.stat-computing{
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted2);
+  margin-left: 6px;
+  vertical-align: middle;
+  white-space: nowrap;
 }
 
 /* =========================
