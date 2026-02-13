@@ -509,7 +509,7 @@ main {
   background: rgba(0,0,0,0.18);
   border-radius: var(--radius-md);
 
-  /* ✅ CHANGED: allow textarea to resize without getting clipped */
+  /* ✅ allow textarea resize without clipping */
   overflow: visible;
 }
 
@@ -603,6 +603,91 @@ main {
   background: rgba(0,0,0,0.22);
 }
 
+/* =========================
+   Saved notes (printed block) ✅ ADDED
+========================= */
+
+.epnote-saved{
+  padding: 10px 12px 12px;
+
+  /* pull inside the card edges so it never overhangs */
+  margin: 0 var(--podRowPadY) var(--podRowPadY);
+
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(0,0,0,0.14);
+
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.epnote-saved-head{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.epnote-saved-title{
+  font-weight: 750;
+  font-size: 13px;
+  color: rgba(255,255,255,0.82);
+}
+
+.epnote-edit{
+  appearance: none;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(0,0,0,0.18);
+  color: rgba(255,255,255,0.92);
+  border-radius: 12px;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.08s ease-out, border-color 0.12s ease-out, background 0.12s ease-out;
+}
+
+.epnote-edit:hover{
+  transform: translateY(-1px);
+  border-color: rgba(255,255,255,0.14);
+  background: rgba(0,0,0,0.22);
+}
+
+.epnote-saved-line{
+  display: grid;
+  grid-template-columns: 86px 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 6px 0;
+}
+
+.epnote-saved-ts{
+  color: rgba(255,255,255,0.70);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.epnote-saved-text{
+  color: rgba(255,255,255,0.90);
+  font-size: 13px;
+  line-height: 1.35;
+
+  /* critical: wrap instead of overflow */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.epnote-saved-more{
+  margin-top: 8px;
+  color: rgba(255,255,255,0.62);
+  font-size: 12px;
+}
+
 /* Editor + rows */
 .epnote-status {
   padding: 0 12px 10px;
@@ -673,7 +758,7 @@ main {
   font-size: 13px;
   line-height: 1.35;
 
-  /* ✅ CHANGED: allow extendable width + height */
+  /* ✅ allow extendable width + height */
   resize: both;
 
   /* ✅ keep it from breaking the card width */
@@ -896,6 +981,11 @@ footer {
     max-height: calc(var(--mobileListMaxH) + 120px);
   }
 
+  /* ✅ keep saved notes inside on small screens too */
+  .epnote-saved{
+    margin: 0 12px 12px;
+  }
+
   .epnote-row {
     grid-template-columns: 28px 86px 1fr 34px;
   }
@@ -911,5 +1001,10 @@ footer {
   .epnote-row {
     grid-template-columns: 28px 80px 1fr 34px;
     gap: 8px;
+  }
+
+  /* ✅ narrower timestamp column in saved notes */
+  .epnote-saved-line{
+    grid-template-columns: 76px 1fr;
   }
 }
