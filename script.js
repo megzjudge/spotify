@@ -390,9 +390,12 @@
         <div class="stat-big">${escapeHtml(String(songs))}</div>
       </div>
 
-      <div class="stat-big">
-        ${escapeHtml(String(songHours.label))}
-        ${songHours.hint ? `<span class="stat-computing">${escapeHtml(songHours.hint)}</span>` : ""}
+      <div class="stat-card">
+        <div class="stat-kicker">Total Song Hrs</div>
+        <div class="stat-big">
+          ${escapeHtml(String(songHours.label))}
+          ${songHours.hint ? `<span class="stat-computing">${escapeHtml(songHours.hint)}</span>` : ""}
+        </div>
       </div>
 
       <div class="stat-card">
