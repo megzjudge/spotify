@@ -4,7 +4,9 @@ export async function onRequestOptions() {
   return new Response(null, { status: 204, headers: corsHeaders() });
 }
 
-export async function onRequestPost({ env, request }) {
+export async function onRequestPost(context) {
+  const { env, request, waitUntil } = context;
+
   try {
     let body = {};
     try { body = await request.json(); } catch {}
@@ -140,9 +142,63 @@ export async function onRequestPost({ env, request }) {
      * METRICS (lightweight)
      *
      * ✅ totals.songs is computed from playlist metadata totals (fast)
-     * ❗ totals.songMs is intentionally null — computed client-side via /api/playlist-duration
+     * ✅ totals.songMsApprox is immediate
+     * ✅ totals.songMsExact is read from KV (if available)
+     * ✅ exact compute is triggered via /api/song-hours in waitUntil (background)
      ***********************/
     const totalSongs = normal.reduce((acc, p) => acc + (Number(p.totalTracks) || 0), 0);
+
+    // Approx: songs * 3 min each
+    const APPROX_MIN_PER_SONG = 3;
+    const songMsApprox = totalSongs * APPROX_MIN_PER_SONG * 60_000;
+
+    // Try read cached exact from KV (if bound)
+    let songMsExact = null;
+    let songMsExactUpdatedAt = null;
+    let songHoursStatus = "approx";
+
+    try {
+      if (env?.SPOTIFY_CACHE?.get) {
+        const exactRaw = await env.SPOTIFY_CACHE.get("songMsExact");
+        if (exactRaw) {
+          const exactObj = JSON.parse(exactRaw);
+          if (typeof exactObj?.ms === "number") {
+            songMsExact = exactObj.ms;
+            songMsExactUpdatedAt = exactObj.updatedAt ?? null;
+            songHoursStatus = "exact";
+          }
+        } else {
+          // If a job is already running, reflect that
+          const running = await env.SPOTIFY_CACHE.get("songMsExactRunning");
+          if (running === "1") songHoursStatus = "computing";
+        }
+      }
+    } catch {
+      // ignore KV parse errors
+    }
+
+    // ✅ Kick off the heavy exact job in the background (do not await)
+    // We trigger your /api/song-hours endpoint. If that endpoint is GET-only, flip this to GET.
+    try {
+      if (typeof waitUntil === "function") {
+        const u = new URL(request.url);
+        u.pathname = "/api/song-hours";
+        waitUntil(
+          fetch(u.toString(), {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Accept: "application/json" },
+            body: JSON.stringify({
+              // allow song-hours.js to use this as a cheap starting point / validation
+              totalSongs,
+              approxMs: songMsApprox,
+              avgMinutesPerSong: APPROX_MIN_PER_SONG
+            })
+          }).catch(() => {})
+        );
+      }
+    } catch {
+      // ignore
+    }
 
     const resp = {
       lastUpdated: new Date().toISOString(),
@@ -150,7 +206,16 @@ export async function onRequestPost({ env, request }) {
       totals: {
         playlists: normal.length,
         songs: totalSongs,
-        songMs: null,              // ✅ computed client-side
+
+        // ✅ new strategy
+        songMsApprox,
+        songMsExact,
+        songMsExactUpdatedAt,
+        songHoursStatus,
+
+        // kept for backward compatibility; UI should prefer exact/approx above
+        songMs: songMsExact ?? null,
+
         podcastEpisodes: null,     // optional: same treatment later
         podcastMs: null
       },
