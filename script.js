@@ -8,8 +8,9 @@
   const API_PLAYLIST = "/api/playlist";
   const API_EPISODE_NOTE = "/api/episode-note";
 
-  // ✅ song-hours endpoint
-  const API_SONG_HOURS = "/api/song-hours";
+  // ✅ IMPORTANT:
+  // /api/song-hours does NOT exist as a Pages Function right now (GET falls back to HTML, POST is 405).
+  // So we compute exact song-hours client-side via Web Worker (song-hours.js) and NEVER call /api/song-hours.
 
   const PODCAST_PLAYLIST_ID = "2tHrihmpYzDbJ8rit7HtFR";
 
@@ -31,6 +32,9 @@
   // ✅ Notes auth (client-side) — stored per-session only.
   const SS_NOTES_AUTH_KEY = "spotify_notes_auth";
 
+  // ✅ Web Worker for exact song hours (client-side)
+  const SONG_HOURS_WORKER_URL = "/song-hours.js";
+
   /***********************
    * DOM
    ***********************/
@@ -47,10 +51,14 @@
     yearSummary: [],
     podcast: { tried: false, error: null, playlist: null, items: [] },
 
-    // ✅ song-hours polling
+    // ✅ song-hours compute (client-side worker)
     songHours: {
-      pollTimer: null,
-      tries: 0
+      worker: null,
+      running: false,
+      done: 0,
+      total: 0,
+      msSoFar: 0,
+      lastError: null
     },
 
     // Episode notes
@@ -344,6 +352,7 @@
   }
 
   function getSongHoursDisplay(totals) {
+    // Prefer client-side exact if we computed it
     const exact = totals?.songMsExact;
     const approx = totals?.songMsApprox;
     const status = String(totals?.songHoursStatus || "");
@@ -352,7 +361,10 @@
 
     if (typeof approx === "number") {
       const approxLabel = `~${fmtHoursFromMs(approx)}`;
-      const hint = status === "computing" ? " (computing…)" : "";
+      const hint =
+        status === "computing"
+          ? ` (computing… ${state.songHours.total ? `${state.songHours.done}/${state.songHours.total}` : ""})`
+          : "";
       return { label: approxLabel, hint };
     }
 
@@ -411,80 +423,128 @@
   }
 
   /***********************
-   * Song-hours: start compute + poll for exact
+   * Song-hours: client-side worker compute (NO /api/song-hours)
    ***********************/
-  function stopSongHoursPolling() {
-    if (state.songHours.pollTimer) {
-      clearInterval(state.songHours.pollTimer);
-      state.songHours.pollTimer = null;
-    }
-    state.songHours.tries = 0;
-  }
-
-  async function kickSongHoursCompute(totalSongs, approxMs) {
+  function stopSongHoursWorker() {
     try {
-      await fetch(API_SONG_HOURS, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({
-          totalSongs: Number(totalSongs) || 0,
-          approxMs: Number(approxMs) || 0,
-          avgMinutesPerSong: 3
-        })
-      });
-    } catch {
-      // ignore
-    }
+      if (state.songHours.worker) {
+        state.songHours.worker.terminate();
+      }
+    } catch {}
+    state.songHours.worker = null;
+    state.songHours.running = false;
+    state.songHours.done = 0;
+    state.songHours.total = 0;
+    state.songHours.msSoFar = 0;
+    state.songHours.lastError = null;
   }
 
-  function startSongHoursPolling() {
-    stopSongHoursPolling();
+  function ensureSongHoursWorker() {
+    if (state.songHours.worker) return state.songHours.worker;
 
-    const totals = state.snapshot?.totals || {};
-    if (typeof totals.songMsExact === "number") return;
+    try {
+      const w = new Worker(SONG_HOURS_WORKER_URL);
+      w.onmessage = (e) => {
+        const msg = e.data || {};
+        if (!state.snapshot?.totals) return;
 
-    if (typeof totals.songMsApprox === "number") {
-      totals.songHoursStatus = "computing";
-      renderStatistics();
-    }
+        if (msg.type === "progress") {
+          state.songHours.running = true;
+          state.songHours.done = Number(msg.done) || 0;
+          state.songHours.total = Number(msg.total) || 0;
+          state.songHours.msSoFar = Number(msg.msSoFar) || 0;
 
-    state.songHours.pollTimer = setInterval(async () => {
-      state.songHours.tries++;
-      if (state.songHours.tries > 45) { // ~90s @ 2s interval
-        stopSongHoursPolling();
-        return;
-      }
-
-      try {
-        const res = await fetch(API_SONG_HOURS, { method: "GET", headers: { Accept: "application/json" } });
-        const text = await res.text();
-        let data = null;
-        try { data = text ? JSON.parse(text) : null; } catch {}
-
-        if (!res.ok || !data) return;
-
-        const exactMs =
-          (typeof data.exactMs === "number") ? data.exactMs :
-          (typeof data.ms === "number") ? data.ms :
-          null;
-
-        if (typeof exactMs === "number") {
-          state.snapshot.totals.songMsExact = exactMs;
-          state.snapshot.totals.songMsExactUpdatedAt = data.updatedAt ?? null;
-          state.snapshot.totals.songHoursStatus = "exact";
-          state.snapshot.totals.songMs = exactMs; // backward compat
+          state.snapshot.totals.songHoursStatus = "computing";
           renderStatistics();
-          stopSongHoursPolling();
           return;
         }
 
-        if (data.running === true || data.running === "1") {
-          if (state.snapshot?.totals) state.snapshot.totals.songHoursStatus = "computing";
+        if (msg.type === "done") {
+          const totalMs = Number(msg.totalMs);
+          if (Number.isFinite(totalMs) && totalMs > 0) {
+            state.snapshot.totals.songMsExact = totalMs;
+            state.snapshot.totals.songMsExactUpdatedAt = new Date().toISOString();
+            state.snapshot.totals.songHoursStatus = "exact";
+            state.snapshot.totals.songMs = totalMs; // backward compat
+          } else {
+            state.snapshot.totals.songHoursStatus = "approx";
+          }
+
+          state.songHours.running = false;
+          renderStatistics();
+          return;
         }
-      } catch {
-        // ignore
-      }
-    }, 2000);
+
+        if (msg.type === "error") {
+          state.songHours.running = false;
+          state.songHours.lastError = String(msg.message || "Unknown worker error");
+          if (state.snapshot?.totals) state.snapshot.totals.songHoursStatus = "approx";
+          console.warn("song-hours worker error:", state.songHours.lastError);
+          renderStatistics();
+        }
+      };
+
+      w.onerror = (err) => {
+        state.songHours.running = false;
+        state.songHours.lastError = String(err?.message || err);
+        if (state.snapshot?.totals) state.snapshot.totals.songHoursStatus = "approx";
+        console.warn("song-hours worker fatal error:", err);
+        renderStatistics();
+      };
+
+      state.songHours.worker = w;
+      return w;
+    } catch (e) {
+      console.warn("Failed to start song-hours worker:", e);
+      return null;
+    }
+  }
+
+  function gatherCorePlaylistIdsForSongHours() {
+    const sections = state.snapshot?.sections || {};
+    const lists = [
+      ...(Array.isArray(sections.dailyMix) ? sections.dailyMix : []),
+      ...(Array.isArray(sections.top) ? sections.top : []),
+      ...(Array.isArray(sections.other) ? sections.other : [])
+    ];
+
+    const ids = new Set();
+    for (const p of lists) {
+      const id = String(p?.id || "").trim();
+      if (id) ids.add(id);
+    }
+    return Array.from(ids);
+  }
+
+  function startSongHoursComputeClientSide() {
+    if (!state.snapshot?.totals) return;
+
+    // If we already have exact, don’t recompute
+    if (typeof state.snapshot.totals.songMsExact === "number") return;
+
+    const playlistIds = gatherCorePlaylistIdsForSongHours();
+    if (!playlistIds.length) return;
+
+    // Set UI state to computing (still shows approx)
+    state.snapshot.totals.songHoursStatus = "computing";
+    renderStatistics();
+
+    const w = ensureSongHoursWorker();
+    if (!w) return;
+
+    // Reset progress
+    state.songHours.running = true;
+    state.songHours.done = 0;
+    state.songHours.total = playlistIds.length;
+    state.songHours.msSoFar = 0;
+    state.songHours.lastError = null;
+
+    // Tell worker to compute exact by calling /api/playlist for each playlistId
+    w.postMessage({
+      playlistIds,
+      throttleMs: 120,
+      limit: 200
+    });
   }
 
   /***********************
@@ -975,9 +1035,6 @@
 
     const mode = isOpen ? state.episodeNotes.openMode : null;
 
-    // ✅ IMPORTANT FIX:
-    // - When opened via 💭 (append), keep Saved notes visible OUTSIDE the editor, and editor is blank.
-    // - When opened via 📝 (edit), editor is prefilled; (optional) hide the printed block to reduce duplication.
     const showSavedBlock =
       (!!episodeId && hasNotes && (!isOpen || mode === "append"));
 
@@ -1053,8 +1110,6 @@
     const entry = getEpisodeCacheEntry(episodeId);
     const mode = state.episodeNotes.openMode || "append";
 
-    // In "append" mode: show blank draft rows (do NOT mirror saved notes into textarea)
-    // In "edit" mode: draftNotes is populated with saved notes before render
     const notes =
       (mode === "edit")
         ? (Array.isArray(entry?.draftNotes) && entry.draftNotes.length ? entry.draftNotes : [{ timestamp: "00:00:00", text: "" }])
@@ -1412,7 +1467,8 @@
    * Refresh
    ***********************/
   async function refreshFromSpotify() {
-    stopSongHoursPolling();
+    // Stop any previous compute
+    stopSongHoursWorker();
 
     buildShell();
     setButtonLoading(true);
@@ -1459,14 +1515,11 @@
       renderYearSummary();
       renderPodcastColumn();
 
-      // background song-hours compute
+      // ✅ START exact song-hours compute client-side (no /api/song-hours)
       const totals = state.snapshot?.totals || {};
       const totalSongs = Number(totals?.songs) || 0;
-      const approxMs = Number(totals?.songMsApprox) || 0;
-
       if (totalSongs > 0 && typeof totals.songMsExact !== "number") {
-        kickSongHoursCompute(totalSongs, approxMs);
-        startSongHoursPolling();
+        startSongHoursComputeClientSide();
       }
 
       setStatus("");
