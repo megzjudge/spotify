@@ -33,7 +33,9 @@
 
   /* Notes UI */
   --noteRowMinH: 38px;
-  --noteTsW: 100px; /* timestamp width */
+
+  /* ✅ bumped from 100px -> fits 00:00:00 + padding */
+  --noteTsW: 128px; /* timestamp width */
 
   /* Podcast visible rows */
   --podVisibleRows: 9; /* ✅ was 8 */
@@ -615,7 +617,7 @@ main {
 }
 
 /* =========================
-   Saved notes (printed block) ✅ ADDED
+   Saved notes (printed block)
 ========================= */
 
 .epnote-saved{
@@ -712,14 +714,29 @@ main {
   background: rgba(0,0,0,0.14);
 }
 
-.epnote-row {
-  display: grid;
-  grid-template-columns: 28px var(--noteTsW) 1fr 34px;
-  gap: 10px;
-  align-items: start;
+/* ✅ NEW LAYOUT:
+   Timestamp row above the textarea.
+   We keep your existing .epnote-row name, but switch it to stacked mode.
+*/
+.epnote-row{
+  display: block;
   margin-bottom: 10px;
 }
 
+/* top line (add + timestamp + save) */
+.epnote-row-top{
+  display: grid;
+  grid-template-columns: 28px minmax(var(--noteTsW), 1fr) 34px;
+  gap: 10px;
+  align-items: center;
+}
+
+/* textarea line */
+.epnote-row .epnote-text{
+  margin-top: 10px;
+}
+
+/* Button */
 .epnote-add {
   appearance: none;
   border: 1px solid rgba(255,255,255,0.10);
@@ -751,6 +768,10 @@ main {
   padding: 6px 10px;
   font-size: 13px;
   outline: none;
+
+  /* ✅ ensure fixed-width numerals */
+  font-variant-numeric: tabular-nums;
+  min-width: var(--noteTsW);
 }
 
 .epnote-time:focus {
@@ -769,16 +790,11 @@ main {
   font-size: 13px;
   line-height: 1.35;
 
-  /* ✅ allow extendable width + height */
+  /* ✅ keep your original behavior */
   resize: both;
 
-  /* ✅ keep it from breaking the card width */
   max-width: 100%;
-
-  /* ✅ prevent it getting too tiny */
   min-width: 220px;
-
-  /* ✅ when resized smaller, allow scrolling */
   overflow: auto;
 
   outline: none;
@@ -968,7 +984,8 @@ footer {
     --podThumb: 72px;
     --podRadius: 18px;
 
-    --noteTsW: 92px;
+    /* ✅ keep timestamp readable on mobile */
+    --noteTsW: 120px;
   }
 
   .app-grid { grid-template-columns: 1fr; }
@@ -999,10 +1016,6 @@ footer {
     margin: 0 12px 12px;
   }
 
-  .epnote-row {
-    grid-template-columns: 28px 86px 1fr 34px;
-  }
-
   body { min-height: 100%; }
 }
 
@@ -1010,11 +1023,6 @@ footer {
   header h1 { font-size: 20px; }
   .detail-head { grid-template-columns: 72px 1fr; }
   .detail-thumb { width: 72px; height: 72px; border-radius: 16px; }
-
-  .epnote-row {
-    grid-template-columns: 28px 80px 1fr 34px;
-    gap: 8px;
-  }
 
   /* ✅ narrower timestamp column in saved notes */
   .epnote-saved-line{
