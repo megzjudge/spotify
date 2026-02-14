@@ -10,7 +10,7 @@
 
   // ✅ IMPORTANT:
   // /api/song-hours does NOT exist as a Pages Function right now (GET falls back to HTML, POST is 405).
-  // So we compute exact song-hours client-side via Web Worker (song-hours.js) and NEVER call /api/song-hours.
+  // So we compute exact song-hours client-side via Web Worker and NEVER call /api/song-hours.
 
   const PODCAST_PLAYLIST_ID = "2tHrihmpYzDbJ8rit7HtFR";
 
@@ -31,9 +31,6 @@
 
   // ✅ Notes auth (client-side) — stored per-session only.
   const SS_NOTES_AUTH_KEY = "spotify_notes_auth";
-
-  // ✅ Web Worker for exact song hours (client-side)
-  const SONG_HOURS_WORKER_URL = "/song-hours.js";
 
   /***********************
    * DOM
@@ -424,6 +421,9 @@
 
   /***********************
    * Song-hours: client-side worker compute (NO /api/song-hours)
+   *
+   * ✅ FIX: Use an inline Blob Worker so it always loads as JS.
+   * This avoids: "Refused to execute script ... MIME type ('text/html')"
    ***********************/
   function stopSongHoursWorker() {
     try {
@@ -442,8 +442,141 @@
   function ensureSongHoursWorker() {
     if (state.songHours.worker) return state.songHours.worker;
 
+    const WORKER_SOURCE = `
+      const API_PLAYLIST = "/api/playlist";
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+      function safeJsonParse(text) {
+        try { return text ? JSON.parse(text) : null; } catch { return null; }
+      }
+
+      async function fetchPlaylistPage({ playlistId, limit, offset }) {
+        const res = await fetch(API_PLAYLIST, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({ playlistId, limit, offset })
+        });
+
+        const text = await res.text();
+        const data = safeJsonParse(text);
+
+        if (!res.ok || !data) {
+          const msg = (data && (data.message || data.error)) || text || ("HTTP " + res.status);
+          throw new Error("Playlist " + playlistId + " failed: " + msg);
+        }
+
+        const items = Array.isArray(data.items) ? data.items : [];
+
+        const nextOffset =
+          (Number.isFinite(Number(data.nextOffset)) ? Number(data.nextOffset) : null) ??
+          (Number.isFinite(Number(data.nextPageOffset)) ? Number(data.nextPageOffset) : null) ??
+          null;
+
+        const hasMore =
+          (typeof data.hasMore === "boolean" ? data.hasMore : null) ??
+          (typeof data.more === "boolean" ? data.more : null) ??
+          null;
+
+        return { items, nextOffset, hasMore };
+      }
+
+      function sumTrackMs(items) {
+        let ms = 0;
+        for (const it of items) {
+          if ((it?.type || "") !== "track") continue;
+          ms += Number(it?.durationMs) || 0;
+        }
+        return ms;
+      }
+
+      async function fetchPlaylistDurationMs(playlistId, { limit = 200 } = {}) {
+        let totalMs = 0;
+        let offset = 0;
+        let safetyPages = 0;
+
+        while (true) {
+          safetyPages++;
+          if (safetyPages > 200) break;
+
+          const { items, nextOffset, hasMore } = await fetchPlaylistPage({
+            playlistId,
+            limit,
+            offset
+          });
+
+          totalMs += sumTrackMs(items);
+
+          const gotFullPage = items.length >= limit;
+
+          if (hasMore === true) {
+            offset = (nextOffset !== null) ? nextOffset : (offset + limit);
+            continue;
+          }
+
+          if (nextOffset !== null && nextOffset !== offset) {
+            offset = nextOffset;
+            continue;
+          }
+
+          if (gotFullPage) {
+            offset += limit;
+            continue;
+          }
+
+          break;
+        }
+
+        return totalMs;
+      }
+
+      self.onmessage = async (e) => {
+        const msg = e.data || {};
+        const playlistIds = Array.isArray(msg.playlistIds) ? msg.playlistIds : [];
+        const throttleMs = Number(msg.throttleMs);
+        const throttle = Number.isFinite(throttleMs) ? Math.max(0, throttleMs) : 120;
+
+        const limitIn = Number(msg.limit);
+        const limit = Number.isFinite(limitIn) ? Math.min(400, Math.max(50, Math.floor(limitIn))) : 200;
+
+        try {
+          let totalMs = 0;
+
+          for (let i = 0; i < playlistIds.length; i++) {
+            const id = String(playlistIds[i] || "").trim();
+            if (!id) continue;
+
+            self.postMessage({
+              type: "progress",
+              done: i,
+              total: playlistIds.length,
+              playlistId: id,
+              msSoFar: totalMs
+            });
+
+            try {
+              totalMs += await fetchPlaylistDurationMs(id, { limit });
+            } catch (err) {
+              await sleep(500);
+              totalMs += await fetchPlaylistDurationMs(id, { limit });
+            }
+
+            if (throttle) await sleep(throttle);
+          }
+
+          self.postMessage({ type: "done", totalMs });
+        } catch (err) {
+          self.postMessage({ type: "error", message: String(err?.message || err) });
+        }
+      };
+    `;
+
     try {
-      const w = new Worker(SONG_HOURS_WORKER_URL);
+      const blob = new Blob([WORKER_SOURCE], { type: "text/javascript" });
+      const url = URL.createObjectURL(blob);
+      const w = new Worker(url);
+      // Safe to revoke immediately; Worker already loaded it
+      URL.revokeObjectURL(url);
+
       w.onmessage = (e) => {
         const msg = e.data || {};
         if (!state.snapshot?.totals) return;
