@@ -616,6 +616,16 @@ main {
   background: rgba(0,0,0,0.22);
 }
 
+.epnote-link-emoji{
+  display: inline-block;
+  margin: 0 2px;
+  text-decoration: none;
+}
+
+.epnote-link-emoji:hover{
+  text-decoration: underline;
+}
+
 /* =========================
    Saved notes (printed block)
 ========================= */
