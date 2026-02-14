@@ -622,14 +622,10 @@ main {
 
 .epnote-saved{
   padding: 10px 12px 12px;
-
-  /* pull inside the card edges so it never overhangs */
   margin: 0 var(--podRowPadY) var(--podRowPadY);
-
   border-radius: 14px;
   border: 1px solid rgba(255,255,255,0.08);
   background: rgba(0,0,0,0.14);
-
   max-width: 100%;
   overflow: hidden;
 }
