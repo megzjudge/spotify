@@ -1006,8 +1006,8 @@
   function renderSavedNotesBlock(episodeId) {
     const notes = savedNotesForEpisode(episodeId);
     if (!notes.length) return "";
-
-    const lines = notes.slice(0, 6).map((n) => {
+  
+    const lines = notes.map((n) => {
       const ts = escapeHtml(n.timestamp);
       const tx = escapeHtml(n.text);
       return `
@@ -1017,9 +1017,7 @@
         </div>
       `;
     }).join("");
-
-    const more = notes.length > 6 ? `<div class="epnote-saved-more">…and ${notes.length - 6} more</div>` : "";
-
+  
     return `
       <div class="epnote-saved" data-epnote-saved="${escapeHtml(episodeId)}">
         <div class="epnote-saved-head">
@@ -1033,7 +1031,6 @@
           >📝</button>
         </div>
         ${lines}
-        ${more}
       </div>
     `;
   }
