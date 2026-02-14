@@ -26,8 +26,13 @@
   // Your /api/refresh is the primary source of truth for Year Summary.
   const YEAR_SUMMARY_PLAYLIST_IDS = [];
 
-  // We still fetch plenty; CSS limits the visible height.
-  const PODCAST_COLUMN_LIMIT = 200;
+  // ✅ Podcast paging config
+  // We page at 200 because your API currently accepts it, but we keep looping with offset.
+  const PODCAST_PAGE_LIMIT = 200;
+
+  // ✅ Safety cap so we never go crazy if an API bug loops pages.
+  // Set this higher if you genuinely have more than this in the playlist.
+  const PODCAST_MAX_ITEMS = 5000;
 
   // ✅ Notes auth (client-side) — stored per-session only.
   const SS_NOTES_AUTH_KEY = "spotify_notes_auth";
@@ -99,7 +104,7 @@
       .replace(/'/g, "&#39;");
   }
 
-  // ✅ NEW: render note text where URLs become a clickable 🔗 emoji
+  // ✅ render note text where URLs become a clickable 🔗 emoji
   // - Keeps storage unchanged (we only transform at render-time)
   // - Supports multiple URLs
   // - Preserves newlines in display via <br>
@@ -181,49 +186,6 @@
       return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
     }
     return "00:00:00";
-  }
-
-  // ✅ NEW: HH:MM:SS -> total seconds (for Spotify ?t=)
-  function timestampToSeconds(ts) {
-    const n = normalizeTimestamp(ts);
-    const parts = n.split(":");
-    const hh = clampInt(parts[0], 0, 999, 0);
-    const mm = clampInt(parts[1], 0, 59, 0);
-    const ss = clampInt(parts[2], 0, 59, 0);
-    return (hh * 3600) + (mm * 60) + ss;
-  }
-
-  // ✅ NEW: find the episode URL from current loaded podcast items (fallback to open.spotify.com/episode/<id>)
-  function getEpisodeUrlById(episodeId) {
-    const id = String(episodeId || "").trim();
-    if (!id) return "";
-
-    const items = Array.isArray(state.podcast?.items) ? state.podcast.items : [];
-    const hit = items.find((x) => String(x?.id || "").trim() === id);
-    const u = String(hit?.url || "").trim();
-    if (u) return u;
-
-    // fallback (works for open.spotify.com ids)
-    return `https://open.spotify.com/episode/${encodeURIComponent(id)}`;
-  }
-
-  // ✅ NEW: build a jump link to a specific timestamp
-  function buildEpisodeJumpUrl(episodeId, ts) {
-    const base = getEpisodeUrlById(episodeId);
-    if (!base) return "";
-
-    const secs = timestampToSeconds(ts);
-    if (!Number.isFinite(secs) || secs <= 0) return base;
-
-    try {
-      const u = new URL(base);
-      u.searchParams.set("t", String(secs));
-      return u.toString();
-    } catch {
-      // crude fallback if base isn't a valid absolute URL (should be)
-      const joiner = base.includes("?") ? "&" : "?";
-      return `${base}${joiner}t=${encodeURIComponent(String(secs))}`;
-    }
   }
 
   function normalizeNotesArray(arr) {
@@ -496,9 +458,6 @@
 
   /***********************
    * Song-hours: client-side worker compute (NO /api/song-hours)
-   *
-   * ✅ FIX: Use an inline Blob Worker so it always loads as JS.
-   * This avoids: "Refused to execute script ... MIME type ('text/html')"
    ***********************/
   function stopSongHoursWorker() {
     try {
@@ -1084,20 +1043,11 @@
     if (!notes.length) return "";
 
     const lines = notes.map((n) => {
-      const tsNorm = normalizeTimestamp(n.timestamp);
-      const jumpUrl = buildEpisodeJumpUrl(episodeId, tsNorm);
-
-      // ✅ Timestamp is clickable: opens episode at that timestamp
-      const tsHtml = jumpUrl
-        ? `<a class="epnote-ts-link" href="${escapeHtml(jumpUrl)}" target="_blank" rel="noopener noreferrer" title="Open episode at ${escapeHtml(tsNorm)}">${escapeHtml(tsNorm)}</a>`
-        : escapeHtml(tsNorm);
-
-      // ✅ URL -> 🔗 emoji (clickable), preserve newlines
+      const ts = escapeHtml(n.timestamp);
       const tx = renderTextWithLinkEmojis(n.text);
-
       return `
         <div class="epnote-saved-line">
-          <div class="epnote-saved-ts">${tsHtml}</div>
+          <div class="epnote-saved-ts">${ts}</div>
           <div class="epnote-saved-text">${tx}</div>
         </div>
       `;
@@ -1123,6 +1073,110 @@
   /***********************
    * Podcast panel
    ***********************/
+
+  // ✅ NEW: small helper for /api/playlist JSON parsing
+  function safeJsonParse(text) {
+    try { return text ? JSON.parse(text) : null; } catch { return null; }
+  }
+
+  // ✅ NEW: detect pagination fields consistently (matches your worker logic)
+  function extractPaging(data) {
+    const nextOffset =
+      (Number.isFinite(Number(data?.nextOffset)) ? Number(data.nextOffset) : null) ??
+      (Number.isFinite(Number(data?.nextPageOffset)) ? Number(data.nextPageOffset) : null) ??
+      null;
+
+    const hasMore =
+      (typeof data?.hasMore === "boolean" ? data.hasMore : null) ??
+      (typeof data?.more === "boolean" ? data.more : null) ??
+      null;
+
+    return { nextOffset, hasMore };
+  }
+
+  // ✅ NEW: fetch the podcast playlist in pages (offset pagination)
+  async function fetchPodcastEpisodesPaged(playlistId, { limit = 200, maxItems = 5000 } = {}) {
+    let playlistMeta = null;
+    let offset = 0;
+    let safety = 0;
+
+    const seenIds = new Set();
+    const out = [];
+
+    while (true) {
+      safety++;
+      if (safety > 200) break; // very hard safety
+
+      const res = await fetch(API_PLAYLIST, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ playlistId, limit, offset })
+      });
+
+      const text = await res.text();
+      const data = safeJsonParse(text);
+
+      if (!res.ok || !data) {
+        const msg = (data && (data.message || data.error)) || text || `HTTP ${res.status}`;
+        throw new Error(msg);
+      }
+
+      if (!playlistMeta) playlistMeta = data.playlist || null;
+
+      const items = Array.isArray(data.items) ? data.items : [];
+      const eps = items.filter((x) => (x?.type || "") === "episode");
+
+      // Add only new episode ids (guards against APIs that ignore offset)
+      let addedThisPage = 0;
+      for (const ep of eps) {
+        const id = String(ep?.id || "").trim();
+        if (!id) continue;
+        if (seenIds.has(id)) continue;
+        seenIds.add(id);
+        out.push(ep);
+        addedThisPage++;
+        if (out.length >= maxItems) break;
+      }
+
+      if (out.length >= maxItems) break;
+
+      const { nextOffset, hasMore } = extractPaging(data);
+
+      // If the API explicitly says there are more pages
+      if (hasMore === true) {
+        const next = (nextOffset !== null) ? nextOffset : (offset + limit);
+
+        // no-progress guard
+        if (next === offset && addedThisPage === 0) break;
+
+        offset = next;
+        continue;
+      }
+
+      // If we have a next offset, trust it
+      if (nextOffset !== null && nextOffset !== offset) {
+        offset = nextOffset;
+        continue;
+      }
+
+      // Fallback heuristic: if we got a full page, try the next offset
+      if (items.length >= limit) {
+        const next = offset + limit;
+
+        // no-progress guard
+        if (next === offset && addedThisPage === 0) break;
+
+        offset = next;
+        continue;
+      }
+
+      // Otherwise we’re done
+      break;
+    }
+
+    return { playlist: playlistMeta, episodes: out };
+  }
+
   async function loadPodcastColumn() {
     state.podcast.tried = true;
     state.podcast.error = null;
@@ -1130,28 +1184,17 @@
     state.podcast.items = [];
 
     try {
-      const res = await fetch(API_PLAYLIST, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ playlistId: PODCAST_PLAYLIST_ID, limit: PODCAST_COLUMN_LIMIT })
+      // ✅ CHANGED: page through the playlist instead of a single call
+      const { playlist, episodes } = await fetchPodcastEpisodesPaged(PODCAST_PLAYLIST_ID, {
+        limit: PODCAST_PAGE_LIMIT,
+        maxItems: PODCAST_MAX_ITEMS
       });
 
-      const text = await res.text();
-      let data = null;
-      try { data = text ? JSON.parse(text) : null; } catch {}
+      state.podcast.playlist = playlist || null;
 
-      if (!res.ok || !data) {
-        const msg = (data && (data.message || data.error)) || text || `HTTP ${res.status}`;
-        console.error("Podcast /api/playlist error payload:", { status: res.status, data, text });
-        state.podcast.error = msg;
-        return;
-      }
+      let items = Array.isArray(episodes) ? episodes : [];
 
-      state.podcast.playlist = data.playlist || null;
-
-      let items = Array.isArray(data.items) ? data.items : [];
-      items = items.filter((x) => (x?.type || "") === "episode");
-
+      // Keep your ordering logic
       const anyAddedAt = items.some((x) => !!x?.addedAt);
       if (anyAddedAt) {
         items.sort((a, b) => {
@@ -1241,8 +1284,6 @@
 
     const mode = isOpen ? state.episodeNotes.openMode : null;
 
-    // ✅ FIX: Saved notes should ONLY be visible while the panel is open (append mode).
-    // When you click 💭 again to close, this will hide saved notes too.
     const showSavedBlock = !!episodeId && isOpen && mode === "append" && hasNotes;
 
     const savedBlock = showSavedBlock ? renderSavedNotesBlock(episodeId) : "";
@@ -1370,7 +1411,6 @@
     listEl.__epnoteBound = true;
 
     // ✅ Force Enter to always insert a newline in the notes textarea
-    // (hard override so nothing upstream can "steal" Enter)
     listEl.addEventListener("keydown", (e) => {
       const el = e.target;
       if (!el || !el.classList || !el.classList.contains("epnote-text")) return;
@@ -1400,14 +1440,14 @@
       const toggleId = t?.getAttribute?.("data-epnote-toggle");
       if (toggleId) {
         e.preventDefault();
-        await toggleEpisodeEditor(toggleId); // 💭 opens/closes APPEND mode
+        await toggleEpisodeEditor(toggleId);
         return;
       }
 
       const editId = t?.getAttribute?.("data-epnote-edit");
       if (editId) {
         e.preventDefault();
-        await openEditorForExistingNotes(editId); // 📝 opens EDIT mode
+        await openEditorForExistingNotes(editId);
         return;
       }
 
@@ -1456,7 +1496,6 @@
       renderPodcastColumn();
       await ensureSavedLoadedMaybe(episodeId);
 
-      // ✅ populate editor with saved notes for editing
       entry.draftNotes = normalizeNotesArray(entry.savedNotes);
     } catch (err) {
       entry.error = String(err?.message || err);
@@ -1476,7 +1515,6 @@
   async function toggleEpisodeEditor(episodeId) {
     if (!episodeId) return;
 
-    // ✅ close if same
     if (state.episodeNotes.openEpisodeId === episodeId) {
       state.episodeNotes.openEpisodeId = null;
       state.episodeNotes.openMode = null;
@@ -1489,12 +1527,10 @@
 
     const entry = getEpisodeCacheEntry(episodeId);
 
-    // ✅ append mode draft is always blank by default
     entry.draftNotes = [{ timestamp: "00:00:00", text: "" }];
 
     renderPodcastColumn();
 
-    // ✅ load saved notes for preview (but do not inject into textarea)
     try {
       entry.error = null;
       renderPodcastColumn();
