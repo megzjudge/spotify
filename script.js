@@ -288,7 +288,10 @@
       const hh = clampInt(parts[0], 0, 999, 0);
       const mm = clampInt(parts[1], 0, 59, 0);
       const ss = clampInt(parts[2], 0, 59, 0);
-      return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+      return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(
+        2,
+        "0"
+      )}`;
     }
     return "00:00:00";
   }
@@ -486,7 +489,6 @@
   }
 
   function getSongHoursDisplay(totals) {
-    // Prefer client-side exact if we computed it
     const exact = totals?.songMsExact;
     const approx = totals?.songMsApprox;
     const status = String(totals?.songHoursStatus || "");
@@ -667,8 +669,6 @@
 
   function startSongHoursComputeClientSide() {
     if (!state.snapshot?.totals) return;
-
-    // If we already have exact, don’t recompute
     if (typeof state.snapshot.totals.songMsExact === "number") return;
 
     const playlistIds = gatherCorePlaylistIdsForSongHours();
@@ -686,7 +686,6 @@
     state.songHours.msSoFar = 0;
     state.songHours.lastError = null;
 
-    // ✅ Key fix: pass absolute base origin into worker
     w.postMessage({
       apiBase: location.origin,
       playlistIds,
@@ -850,9 +849,9 @@
       return c[episodeId];
     }
 
-    // Backward-compat if older cached shape exists
     const entry = c[episodeId];
 
+    // Backward-compat if older cached shape exists
     if (Array.isArray(entry.notes) && !Array.isArray(entry.savedNotes)) {
       entry.savedNotes = normalizeNotesArray(entry.notes);
       entry.loadedSaved = !!entry.loaded;
@@ -917,7 +916,6 @@
     entry.savedAt = null;
     entry.error = null;
 
-    // sync summary set
     const hasText = meaningfulNotes(entry.savedNotes).length > 0;
     if (hasText) state.episodeNotes.episodesWithNotes.add(String(episodeId));
     else state.episodeNotes.episodesWithNotes.delete(String(episodeId));
@@ -1003,10 +1001,8 @@
   function episodeHasNotes(episodeId) {
     if (!episodeId) return false;
 
-    // fast-path: known from summary API
     if (state.episodeNotes.episodesWithNotes?.has(String(episodeId))) return true;
 
-    // fallback: if cached, inspect savedNotes
     const entry = state.episodeNotes.cache?.[episodeId];
     if (!entry) return false;
 
@@ -1317,38 +1313,52 @@
     `;
   }
 
+  /***********************
+   * ✅ FIX: robust click delegation (works even if user clicks the emoji/text node)
+   * This is why your "click bubble again to close" wasn't firing reliably.
+   ***********************/
   function wirePodcastInteractions(listEl) {
     if (listEl.__epnoteBound) return;
     listEl.__epnoteBound = true;
 
     listEl.addEventListener("click", async (e) => {
-      const t = e.target;
+      const rawTarget = e.target;
+      const targetEl =
+        rawTarget && rawTarget.nodeType === 1
+          ? rawTarget
+          : rawTarget?.parentElement || null;
 
-      const toggleId = t?.getAttribute?.("data-epnote-toggle");
-      if (toggleId) {
+      if (!targetEl) return;
+
+      const toggleBtn = targetEl.closest?.("[data-epnote-toggle]");
+      if (toggleBtn) {
         e.preventDefault();
-        await toggleEpisodeEditor(toggleId); // 💭 opens APPEND mode
+        const id = toggleBtn.getAttribute("data-epnote-toggle");
+        if (id) await toggleEpisodeEditor(id); // 💭 toggles open/close
         return;
       }
 
-      const editId = t?.getAttribute?.("data-epnote-edit");
-      if (editId) {
+      const editBtn = targetEl.closest?.("[data-epnote-edit]");
+      if (editBtn) {
         e.preventDefault();
-        await openEditorForExistingNotes(editId); // 📝 opens EDIT mode
+        const id = editBtn.getAttribute("data-epnote-edit");
+        if (id) await openEditorForExistingNotes(id); // 📝 edit mode
         return;
       }
 
-      const addId = t?.getAttribute?.("data-epnote-add");
-      if (addId) {
+      const addBtn = targetEl.closest?.("[data-epnote-add]");
+      if (addBtn) {
         e.preventDefault();
-        addEpisodeRow(addId);
+        const id = addBtn.getAttribute("data-epnote-add");
+        if (id) addEpisodeRow(id);
         return;
       }
 
-      const saveId = t?.getAttribute?.("data-epnote-save");
-      if (saveId) {
+      const saveBtn = targetEl.closest?.("[data-epnote-save]");
+      if (saveBtn) {
         e.preventDefault();
-        await saveEpisodeFromDom(saveId);
+        const id = saveBtn.getAttribute("data-epnote-save");
+        if (id) await saveEpisodeFromDom(id);
         return;
       }
     });
@@ -1383,7 +1393,6 @@
       renderPodcastColumn();
       await ensureSavedLoadedMaybe(episodeId);
 
-      // ✅ populate editor with saved notes for editing
       entry.draftNotes = normalizeNotesArray(entry.savedNotes);
     } catch (err) {
       entry.error = String(err?.message || err);
@@ -1403,7 +1412,7 @@
   async function toggleEpisodeEditor(episodeId) {
     if (!episodeId) return;
 
-    // close if same
+    // ✅ close if same episode is open
     if (state.episodeNotes.openEpisodeId === episodeId) {
       state.episodeNotes.openEpisodeId = null;
       state.episodeNotes.openMode = null;
@@ -1416,13 +1425,12 @@
 
     const entry = getEpisodeCacheEntry(episodeId);
 
-    // ✅ append mode draft is always blank by default
+    // append mode draft is always blank by default
     entry.draftNotes = [{ timestamp: "00:00:00", text: "" }];
 
     renderPodcastColumn();
 
-    // ✅ load saved notes (so the printed block shows the real saved text),
-    // but DO NOT put them into the textbox.
+    // load saved notes (for the saved block), but do not put them into textbox
     try {
       entry.error = null;
       renderPodcastColumn();
@@ -1497,16 +1505,13 @@
     const mode = state.episodeNotes.openMode || "append";
     const draft = collectDraftNotesFromDom(episodeId);
 
-    // Update cache draft
     entry.draftNotes = draft;
 
     let finalNotes = [];
 
     if (mode === "edit") {
-      // overwrite with draft
       finalNotes = normalizeNotesArray(draft);
     } else {
-      // append: savedNotes + draftNotes (only meaningful draft lines)
       const saved = normalizeNotesArray(entry.savedNotes);
       const draftMeaningful = meaningfulNotes(draft);
       finalNotes = normalizeNotesArray([...saved, ...draftMeaningful]);
@@ -1524,7 +1529,6 @@
     try {
       await saveEpisodeNotes(episodeId, finalNotes, authToken);
 
-      // ✅ after save: close editor and reset draft
       entry.draftNotes = [{ timestamp: "00:00:00", text: "" }];
       state.episodeNotes.openEpisodeId = null;
       state.episodeNotes.openMode = null;
@@ -1532,7 +1536,6 @@
       renderPodcastColumn();
     } catch (err) {
       console.error(err);
-      // keep open on error
       renderPodcastColumn();
     }
   }
@@ -1630,7 +1633,6 @@
    * Refresh
    ***********************/
   async function refreshFromSpotify() {
-    // Stop any previous compute
     stopSongHoursWorker();
 
     buildShell();
@@ -1678,7 +1680,6 @@
       renderYearSummary();
       renderPodcastColumn();
 
-      // ✅ START exact song-hours compute client-side (no /api/song-hours)
       const totals = state.snapshot?.totals || {};
       const totalSongs = Number(totals?.songs) || 0;
       if (totalSongs > 0 && typeof totals.songMsExact !== "number") {
