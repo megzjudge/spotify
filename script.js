@@ -183,6 +183,49 @@
     return "00:00:00";
   }
 
+  // ✅ NEW: HH:MM:SS -> total seconds (for Spotify ?t=)
+  function timestampToSeconds(ts) {
+    const n = normalizeTimestamp(ts);
+    const parts = n.split(":");
+    const hh = clampInt(parts[0], 0, 999, 0);
+    const mm = clampInt(parts[1], 0, 59, 0);
+    const ss = clampInt(parts[2], 0, 59, 0);
+    return (hh * 3600) + (mm * 60) + ss;
+  }
+
+  // ✅ NEW: find the episode URL from current loaded podcast items (fallback to open.spotify.com/episode/<id>)
+  function getEpisodeUrlById(episodeId) {
+    const id = String(episodeId || "").trim();
+    if (!id) return "";
+
+    const items = Array.isArray(state.podcast?.items) ? state.podcast.items : [];
+    const hit = items.find((x) => String(x?.id || "").trim() === id);
+    const u = String(hit?.url || "").trim();
+    if (u) return u;
+
+    // fallback (works for open.spotify.com ids)
+    return `https://open.spotify.com/episode/${encodeURIComponent(id)}`;
+  }
+
+  // ✅ NEW: build a jump link to a specific timestamp
+  function buildEpisodeJumpUrl(episodeId, ts) {
+    const base = getEpisodeUrlById(episodeId);
+    if (!base) return "";
+
+    const secs = timestampToSeconds(ts);
+    if (!Number.isFinite(secs) || secs <= 0) return base;
+
+    try {
+      const u = new URL(base);
+      u.searchParams.set("t", String(secs));
+      return u.toString();
+    } catch {
+      // crude fallback if base isn't a valid absolute URL (should be)
+      const joiner = base.includes("?") ? "&" : "?";
+      return `${base}${joiner}t=${encodeURIComponent(String(secs))}`;
+    }
+  }
+
   function normalizeNotesArray(arr) {
     const src = Array.isArray(arr) ? arr : [];
     const out = src
@@ -1041,12 +1084,20 @@
     if (!notes.length) return "";
 
     const lines = notes.map((n) => {
-      const ts = escapeHtml(n.timestamp);
+      const tsNorm = normalizeTimestamp(n.timestamp);
+      const jumpUrl = buildEpisodeJumpUrl(episodeId, tsNorm);
+
+      // ✅ Timestamp is clickable: opens episode at that timestamp
+      const tsHtml = jumpUrl
+        ? `<a class="epnote-ts-link" href="${escapeHtml(jumpUrl)}" target="_blank" rel="noopener noreferrer" title="Open episode at ${escapeHtml(tsNorm)}">${escapeHtml(tsNorm)}</a>`
+        : escapeHtml(tsNorm);
+
       // ✅ URL -> 🔗 emoji (clickable), preserve newlines
       const tx = renderTextWithLinkEmojis(n.text);
+
       return `
         <div class="epnote-saved-line">
-          <div class="epnote-saved-ts">${ts}</div>
+          <div class="epnote-saved-ts">${tsHtml}</div>
           <div class="epnote-saved-text">${tx}</div>
         </div>
       `;
@@ -1318,16 +1369,13 @@
     if (listEl.__epnoteBound) return;
     listEl.__epnoteBound = true;
 
-    // ✅ NEW: Force Enter to always insert a newline in the notes textarea
-    // This is a hard override so nothing upstream can "steal" Enter.
+    // ✅ Force Enter to always insert a newline in the notes textarea
+    // (hard override so nothing upstream can "steal" Enter)
     listEl.addEventListener("keydown", (e) => {
       const el = e.target;
       if (!el || !el.classList || !el.classList.contains("epnote-text")) return;
 
-      // Plain Enter inserts newline; Shift+Enter also inserts newline by default, so we leave it alone.
       if (e.key === "Enter" && !e.ctrlKey && !e.altKey && !e.metaKey) {
-        // If browser default is working, this still works fine; but if something else prevents default,
-        // we force it here.
         e.preventDefault();
         e.stopPropagation();
 
@@ -1341,7 +1389,6 @@
           el.selectionStart = el.selectionEnd = pos;
         } catch {}
 
-        // Keep your auto-height behavior consistent
         el.style.height = "auto";
         el.style.height = `${Math.min(220, el.scrollHeight)}px`;
       }
