@@ -1182,31 +1182,89 @@
     state.podcast.error = null;
     state.podcast.playlist = null;
     state.podcast.items = [];
-
+  
+    const playlistId = PODCAST_PLAYLIST_ID;
+  
+    // page size (Spotify allows up to 100 for many endpoints; your API seems to support 200)
+    const limit = 200;
+  
     try {
-      // ✅ CHANGED: page through the playlist instead of a single call
-      const { playlist, episodes } = await fetchPodcastEpisodesPaged(PODCAST_PLAYLIST_ID, {
-        limit: PODCAST_PAGE_LIMIT,
-        maxItems: PODCAST_MAX_ITEMS
-      });
-
-      state.podcast.playlist = playlist || null;
-
-      let items = Array.isArray(episodes) ? episodes : [];
-
-      // Keep your ordering logic
-      const anyAddedAt = items.some((x) => !!x?.addedAt);
+      const allEpisodes = [];
+      const seen = new Set();
+  
+      let offset = 0;
+      let safety = 0;
+  
+      while (true) {
+        safety++;
+        if (safety > 25) break; // hard safety cap
+  
+        const res = await fetch(API_PLAYLIST, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({ playlistId, limit, offset })
+        });
+  
+        const text = await res.text();
+        let data = null;
+        try { data = text ? JSON.parse(text) : null; } catch {}
+  
+        if (!res.ok || !data) {
+          const msg = (data && (data.message || data.error)) || text || `HTTP ${res.status}`;
+          console.error("Podcast /api/playlist error payload:", { status: res.status, data, text });
+          state.podcast.error = msg;
+          return;
+        }
+  
+        // keep playlist meta from the first page
+        if (!state.podcast.playlist) state.podcast.playlist = data.playlist || null;
+  
+        const items = Array.isArray(data.items) ? data.items : [];
+        const episodes = items.filter((x) => (x?.type || "") === "episode");
+  
+        for (const ep of episodes) {
+          const id = String(ep?.id || "").trim();
+          if (!id) continue;
+          if (seen.has(id)) continue;
+          seen.add(id);
+          allEpisodes.push(ep);
+        }
+  
+        const hasMore =
+          (typeof data.hasMore === "boolean" ? data.hasMore : null) ??
+          (typeof data.more === "boolean" ? data.more : null) ??
+          false;
+  
+        const nextOffsetRaw =
+          (Number.isFinite(Number(data.nextOffset)) ? Number(data.nextOffset) : null) ??
+          (Number.isFinite(Number(data.nextPageOffset)) ? Number(data.nextPageOffset) : null) ??
+          null;
+  
+        // ✅ IMPORTANT: if hasMore is false, stop regardless of nextOffset weirdness
+        if (!hasMore) break;
+  
+        // if API provides a sane nextOffset use it; otherwise increment by limit
+        const nextOffset = (nextOffsetRaw !== null && nextOffsetRaw !== offset) ? nextOffsetRaw : (offset + limit);
+  
+        // guard against looping
+        if (nextOffset === offset) break;
+  
+        offset = nextOffset;
+      }
+  
+      // Sort same as before
+      const anyAddedAt = allEpisodes.some((x) => !!x?.addedAt);
       if (anyAddedAt) {
-        items.sort((a, b) => {
+        allEpisodes.sort((a, b) => {
           const ta = a?.addedAt ? Date.parse(a.addedAt) : 0;
           const tb = b?.addedAt ? Date.parse(b.addedAt) : 0;
           return tb - ta;
         });
       } else {
-        items.reverse();
+        allEpisodes.reverse();
       }
-
-      state.podcast.items = items;
+  
+      state.podcast.items = allEpisodes;
     } catch (e) {
       state.podcast.error = String(e?.message || e);
     }
