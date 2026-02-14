@@ -9,8 +9,9 @@
   const API_EPISODE_NOTE = "/api/episode-note";
 
   // ✅ IMPORTANT:
-  // /api/song-hours does NOT exist as a Pages Function right now (GET falls back to HTML, POST is 405).
-  // So we compute exact song-hours client-side via Web Worker and NEVER call /api/song-hours.
+  // /api/song-hours does NOT exist as a Pages Function right now.
+  // We compute exact song-hours client-side via an embedded Web Worker
+  // and NEVER call /api/song-hours.
 
   const PODCAST_PLAYLIST_ID = "2tHrihmpYzDbJ8rit7HtFR";
 
@@ -32,6 +33,156 @@
   // ✅ Notes auth (client-side) — stored per-session only.
   const SS_NOTES_AUTH_KEY = "spotify_notes_auth";
 
+  // ✅ Embedded Web Worker source (so we don't rely on /song-hours.js existing on the server)
+  // Fixes:
+  // - Worker fetch uses absolute URL built from apiBase (location.origin)
+  // - Avoids MIME/type issues + avoids "Failed to parse URL" for relative fetch in blob workers
+  const SONG_HOURS_WORKER_SOURCE = `
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    function safeJsonParse(text) {
+      try { return text ? JSON.parse(text) : null; } catch { return null; }
+    }
+
+    function joinBase(base, path) {
+      const b = String(base || "").replace(/\\/+$/, "");
+      const p = String(path || "");
+      if (!b) return p;
+      if (!p) return b;
+      if (p.startsWith("/")) return b + p;
+      return b + "/" + p;
+    }
+
+    async function fetchPlaylistPage({ apiBase, playlistId, limit, offset }) {
+      const url = joinBase(apiBase, "/api/playlist");
+
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ playlistId, limit, offset })
+      });
+
+      const text = await res.text();
+      const data = safeJsonParse(text);
+
+      if (!res.ok || !data) {
+        const msg = (data && (data.message || data.error)) || text || ("HTTP " + res.status);
+        throw new Error("Playlist " + playlistId + " failed: " + msg);
+      }
+
+      const items = Array.isArray(data.items) ? data.items : [];
+
+      const nextOffset =
+        (Number.isFinite(Number(data.nextOffset)) ? Number(data.nextOffset) : null) ??
+        (Number.isFinite(Number(data.nextPageOffset)) ? Number(data.nextPageOffset) : null) ??
+        null;
+
+      const hasMore =
+        (typeof data.hasMore === "boolean" ? data.hasMore : null) ??
+        (typeof data.more === "boolean" ? data.more : null) ??
+        null;
+
+      return { items, nextOffset, hasMore };
+    }
+
+    function sumTrackMs(items) {
+      let ms = 0;
+      for (const it of items) {
+        if ((it?.type || "") !== "track") continue;
+        ms += Number(it?.durationMs) || 0;
+      }
+      return ms;
+    }
+
+    async function fetchPlaylistDurationMs(apiBase, playlistId, { limit = 200 } = {}) {
+      let totalMs = 0;
+      let offset = 0;
+      let safetyPages = 0;
+
+      while (true) {
+        safetyPages++;
+        if (safetyPages > 200) break;
+
+        const { items, nextOffset, hasMore } = await fetchPlaylistPage({
+          apiBase,
+          playlistId,
+          limit,
+          offset
+        });
+
+        totalMs += sumTrackMs(items);
+
+        const gotFullPage = items.length >= limit;
+
+        if (hasMore === true) {
+          offset = (nextOffset !== null) ? nextOffset : (offset + limit);
+          continue;
+        }
+
+        if (nextOffset !== null && nextOffset !== offset) {
+          offset = nextOffset;
+          continue;
+        }
+
+        if (gotFullPage) {
+          offset += limit;
+          continue;
+        }
+
+        break;
+      }
+
+      return totalMs;
+    }
+
+    self.onmessage = async (e) => {
+      const msg = e.data || {};
+      const apiBase = String(msg.apiBase || "").trim();
+      const playlistIds = Array.isArray(msg.playlistIds) ? msg.playlistIds : [];
+
+      const throttleMs = Number(msg.throttleMs);
+      const throttle = Number.isFinite(throttleMs) ? Math.max(0, throttleMs) : 120;
+
+      const limitIn = Number(msg.limit);
+      const limit = Number.isFinite(limitIn) ? Math.min(400, Math.max(50, Math.floor(limitIn))) : 200;
+
+      if (!apiBase) {
+        self.postMessage({ type: "error", message: "Missing apiBase (expected location.origin)." });
+        return;
+      }
+
+      try {
+        let totalMs = 0;
+
+        for (let i = 0; i < playlistIds.length; i++) {
+          const id = String(playlistIds[i] || "").trim();
+          if (!id) continue;
+
+          self.postMessage({
+            type: "progress",
+            done: i,
+            total: playlistIds.length,
+            playlistId: id,
+            msSoFar: totalMs
+          });
+
+          try {
+            totalMs += await fetchPlaylistDurationMs(apiBase, id, { limit });
+          } catch (err) {
+            await sleep(500);
+            totalMs += await fetchPlaylistDurationMs(apiBase, id, { limit });
+          }
+
+          if (throttle) await sleep(throttle);
+        }
+
+        self.postMessage({ type: "done", totalMs });
+      } catch (err) {
+        self.postMessage({ type: "error", message: String(err?.message || err) });
+      }
+    };
+  `;
+
   /***********************
    * DOM
    ***********************/
@@ -51,6 +202,7 @@
     // ✅ song-hours compute (client-side worker)
     songHours: {
       worker: null,
+      workerUrl: null, // blob URL so we can revoke later
       running: false,
       done: 0,
       total: 0,
@@ -60,16 +212,7 @@
 
     // Episode notes
     episodeNotes: {
-      // episodeId -> {
-      //   savedNotes:[{timestamp,text}],
-      //   draftNotes:[{timestamp,text}],
-      //   loadedSaved:boolean,
-      //   saving:boolean,
-      //   savedAt:number|null,
-      //   error:string|null
-      // }
       cache: Object.create(null),
-
       openEpisodeId: null,
 
       // ✅ "append" when opening via 💭 bubble (keep saved notes outside; draft empty)
@@ -250,7 +393,6 @@
             <div class="podcast-empty" id="podcastEmpty"></div>
             <div class="podcast-error" id="podcastError" hidden></div>
 
-            <!-- ✅ UL is the scroll container -->
             <ul class="podcast-list" id="podcastList"></ul>
           </div>
         </aside>
@@ -324,16 +466,11 @@
    ***********************/
   function computeSongCountFromSnapshot({ includeOthers = false, includeYearSummary = false } = {}) {
     const sections = state.snapshot?.sections || {};
-    const getList = (k) => Array.isArray(sections?.[k]) ? sections[k] : [];
+    const getList = (k) => (Array.isArray(sections?.[k]) ? sections[k] : []);
 
-    const core = [
-      ...getList("dailyMix"),
-      ...getList("top"),
-      ...getList("other")
-    ];
+    const core = [...getList("dailyMix"), ...getList("top"), ...getList("other")];
 
-    const sumTracks = (arr) =>
-      arr.reduce((acc, p) => acc + (Number(p?.totalTracks) || 0), 0);
+    const sumTracks = (arr) => arr.reduce((acc, p) => acc + (Number(p?.totalTracks) || 0), 0);
 
     let sum = sumTracks(core);
     if (includeOthers) sum += sumTracks(state.others || []);
@@ -360,7 +497,9 @@
       const approxLabel = `~${fmtHoursFromMs(approx)}`;
       const hint =
         status === "computing"
-          ? ` (computing… ${state.songHours.total ? `${state.songHours.done}/${state.songHours.total}` : ""})`
+          ? ` (computing… ${
+              state.songHours.total ? `${state.songHours.done}/${state.songHours.total}` : ""
+            })`
           : "";
       return { label: approxLabel, hint };
     }
@@ -379,14 +518,18 @@
       includeOthers: false,
       includeYearSummary: false
     });
-    const songs = computedSongs > 0 ? computedSongs : (totals.songs ?? "–");
+    const songs = computedSongs > 0 ? computedSongs : totals.songs ?? "–";
 
     const songHours = getSongHoursDisplay(totals);
 
     const pod = computePodcastStatsFromState();
-    const podEps = pod.episodes > 0 ? pod.episodes : (totals.podcastEpisodes ?? "–");
-    const podHours = pod.episodes > 0 ? fmtHoursFromMs(pod.ms) :
-      (typeof totals.podcastMs === "number" ? fmtHoursFromMs(totals.podcastMs) : "–");
+    const podEps = pod.episodes > 0 ? pod.episodes : totals.podcastEpisodes ?? "–";
+    const podHours =
+      pod.episodes > 0
+        ? fmtHoursFromMs(pod.ms)
+        : typeof totals.podcastMs === "number"
+          ? fmtHoursFromMs(totals.podcastMs)
+          : "–";
 
     grid.innerHTML = `
       <div class="stat-card span-2">
@@ -421,17 +564,18 @@
 
   /***********************
    * Song-hours: client-side worker compute (NO /api/song-hours)
-   *
-   * ✅ FIX: Use an inline Blob Worker so it always loads as JS.
-   * This avoids: "Refused to execute script ... MIME type ('text/html')"
    ***********************/
   function stopSongHoursWorker() {
     try {
-      if (state.songHours.worker) {
-        state.songHours.worker.terminate();
-      }
+      if (state.songHours.worker) state.songHours.worker.terminate();
     } catch {}
+
+    if (state.songHours.workerUrl) {
+      try { URL.revokeObjectURL(state.songHours.workerUrl); } catch {}
+    }
+
     state.songHours.worker = null;
+    state.songHours.workerUrl = null;
     state.songHours.running = false;
     state.songHours.done = 0;
     state.songHours.total = 0;
@@ -442,140 +586,13 @@
   function ensureSongHoursWorker() {
     if (state.songHours.worker) return state.songHours.worker;
 
-    const WORKER_SOURCE = `
-      const API_PLAYLIST = "/api/playlist";
-      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-      function safeJsonParse(text) {
-        try { return text ? JSON.parse(text) : null; } catch { return null; }
-      }
-
-      async function fetchPlaylistPage({ playlistId, limit, offset }) {
-        const res = await fetch(API_PLAYLIST, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Accept: "application/json" },
-          body: JSON.stringify({ playlistId, limit, offset })
-        });
-
-        const text = await res.text();
-        const data = safeJsonParse(text);
-
-        if (!res.ok || !data) {
-          const msg = (data && (data.message || data.error)) || text || ("HTTP " + res.status);
-          throw new Error("Playlist " + playlistId + " failed: " + msg);
-        }
-
-        const items = Array.isArray(data.items) ? data.items : [];
-
-        const nextOffset =
-          (Number.isFinite(Number(data.nextOffset)) ? Number(data.nextOffset) : null) ??
-          (Number.isFinite(Number(data.nextPageOffset)) ? Number(data.nextPageOffset) : null) ??
-          null;
-
-        const hasMore =
-          (typeof data.hasMore === "boolean" ? data.hasMore : null) ??
-          (typeof data.more === "boolean" ? data.more : null) ??
-          null;
-
-        return { items, nextOffset, hasMore };
-      }
-
-      function sumTrackMs(items) {
-        let ms = 0;
-        for (const it of items) {
-          if ((it?.type || "") !== "track") continue;
-          ms += Number(it?.durationMs) || 0;
-        }
-        return ms;
-      }
-
-      async function fetchPlaylistDurationMs(playlistId, { limit = 200 } = {}) {
-        let totalMs = 0;
-        let offset = 0;
-        let safetyPages = 0;
-
-        while (true) {
-          safetyPages++;
-          if (safetyPages > 200) break;
-
-          const { items, nextOffset, hasMore } = await fetchPlaylistPage({
-            playlistId,
-            limit,
-            offset
-          });
-
-          totalMs += sumTrackMs(items);
-
-          const gotFullPage = items.length >= limit;
-
-          if (hasMore === true) {
-            offset = (nextOffset !== null) ? nextOffset : (offset + limit);
-            continue;
-          }
-
-          if (nextOffset !== null && nextOffset !== offset) {
-            offset = nextOffset;
-            continue;
-          }
-
-          if (gotFullPage) {
-            offset += limit;
-            continue;
-          }
-
-          break;
-        }
-
-        return totalMs;
-      }
-
-      self.onmessage = async (e) => {
-        const msg = e.data || {};
-        const playlistIds = Array.isArray(msg.playlistIds) ? msg.playlistIds : [];
-        const throttleMs = Number(msg.throttleMs);
-        const throttle = Number.isFinite(throttleMs) ? Math.max(0, throttleMs) : 120;
-
-        const limitIn = Number(msg.limit);
-        const limit = Number.isFinite(limitIn) ? Math.min(400, Math.max(50, Math.floor(limitIn))) : 200;
-
-        try {
-          let totalMs = 0;
-
-          for (let i = 0; i < playlistIds.length; i++) {
-            const id = String(playlistIds[i] || "").trim();
-            if (!id) continue;
-
-            self.postMessage({
-              type: "progress",
-              done: i,
-              total: playlistIds.length,
-              playlistId: id,
-              msSoFar: totalMs
-            });
-
-            try {
-              totalMs += await fetchPlaylistDurationMs(id, { limit });
-            } catch (err) {
-              await sleep(500);
-              totalMs += await fetchPlaylistDurationMs(id, { limit });
-            }
-
-            if (throttle) await sleep(throttle);
-          }
-
-          self.postMessage({ type: "done", totalMs });
-        } catch (err) {
-          self.postMessage({ type: "error", message: String(err?.message || err) });
-        }
-      };
-    `;
-
     try {
-      const blob = new Blob([WORKER_SOURCE], { type: "text/javascript" });
+      const blob = new Blob([SONG_HOURS_WORKER_SOURCE], { type: "text/javascript" });
       const url = URL.createObjectURL(blob);
       const w = new Worker(url);
-      // Safe to revoke immediately; Worker already loaded it
-      URL.revokeObjectURL(url);
+
+      state.songHours.worker = w;
+      state.songHours.workerUrl = url;
 
       w.onmessage = (e) => {
         const msg = e.data || {};
@@ -625,7 +642,6 @@
         renderStatistics();
       };
 
-      state.songHours.worker = w;
       return w;
     } catch (e) {
       console.warn("Failed to start song-hours worker:", e);
@@ -658,22 +674,21 @@
     const playlistIds = gatherCorePlaylistIdsForSongHours();
     if (!playlistIds.length) return;
 
-    // Set UI state to computing (still shows approx)
     state.snapshot.totals.songHoursStatus = "computing";
     renderStatistics();
 
     const w = ensureSongHoursWorker();
     if (!w) return;
 
-    // Reset progress
     state.songHours.running = true;
     state.songHours.done = 0;
     state.songHours.total = playlistIds.length;
     state.songHours.msSoFar = 0;
     state.songHours.lastError = null;
 
-    // Tell worker to compute exact by calling /api/playlist for each playlistId
+    // ✅ Key fix: pass absolute base origin into worker
     w.postMessage({
+      apiBase: location.origin,
       playlistIds,
       throttleMs: 120,
       limit: 200
@@ -1015,18 +1030,22 @@
     const notes = savedNotesForEpisode(episodeId);
     if (!notes.length) return "";
 
-    const lines = notes.slice(0, 6).map((n) => {
-      const ts = escapeHtml(n.timestamp);
-      const tx = escapeHtml(n.text);
-      return `
+    const lines = notes
+      .slice(0, 6)
+      .map((n) => {
+        const ts = escapeHtml(n.timestamp);
+        const tx = escapeHtml(n.text);
+        return `
         <div class="epnote-saved-line">
           <div class="epnote-saved-ts">${ts}</div>
           <div class="epnote-saved-text">${tx}</div>
         </div>
       `;
-    }).join("");
+      })
+      .join("");
 
-    const more = notes.length > 6 ? `<div class="epnote-saved-more">…and ${notes.length - 6} more</div>` : "";
+    const more =
+      notes.length > 6 ? `<div class="epnote-saved-more">…and ${notes.length - 6} more</div>` : "";
 
     return `
       <div class="epnote-saved" data-epnote-saved="${escapeHtml(episodeId)}">
@@ -1076,7 +1095,6 @@
       state.podcast.playlist = data.playlist || null;
 
       let items = Array.isArray(data.items) ? data.items : [];
-
       items = items.filter((x) => (x?.type || "") === "episode");
 
       const anyAddedAt = items.some((x) => !!x?.addedAt);
@@ -1157,7 +1175,9 @@
     const dur = fmtDurationFromMs(it.durationMs || 0);
     const url = it.url || "#";
 
-    const isOpen = state.episodeNotes.openEpisodeId && episodeId && state.episodeNotes.openEpisodeId === episodeId;
+    const isOpen =
+      state.episodeNotes.openEpisodeId && episodeId && state.episodeNotes.openEpisodeId === episodeId;
+
     const hasNotes = episodeId ? episodeHasNotes(episodeId) : false;
     const noteOpacity = hasNotes ? 1 : 0.25;
 
@@ -1168,20 +1188,19 @@
 
     const mode = isOpen ? state.episodeNotes.openMode : null;
 
-    const showSavedBlock =
-      (!!episodeId && hasNotes && (!isOpen || mode === "append"));
-
+    const showSavedBlock = !!episodeId && hasNotes && (!isOpen || mode === "append");
     const savedBlock = showSavedBlock ? renderSavedNotesBlock(episodeId) : "";
 
     const editorHtml = isOpen && episodeId ? renderEpisodeNotesEditor(episodeId) : "";
 
-    const statusLine = isOpen && episodeId
-      ? `
+    const statusLine =
+      isOpen && episodeId
+        ? `
         <div class="epnote-status" data-epnote-status="${escapeHtml(episodeId)}">
-          ${saving ? "Saving…" : (err ? `Error: ${escapeHtml(err)}` : (savedAt ? "Saved ✓" : ""))}
+          ${saving ? "Saving…" : err ? `Error: ${escapeHtml(err)}` : savedAt ? "Saved ✓" : ""}
         </div>
       `
-      : "";
+        : "";
 
     return `
       <li class="podcast-item" data-episode-id="${escapeHtml(episodeId)}">
@@ -1229,10 +1248,14 @@
       if (img.__fallbackBound) return;
       img.__fallbackBound = true;
 
-      img.addEventListener("error", () => {
-        if (img.src && img.src.includes("spotify_logo.png")) return;
-        img.src = FALLBACK;
-      }, { passive: true });
+      img.addEventListener(
+        "error",
+        () => {
+          if (img.src && img.src.includes("spotify_logo.png")) return;
+          img.src = FALLBACK;
+        },
+        { passive: true }
+      );
     });
   }
 
@@ -1241,20 +1264,21 @@
    ***********************/
   function renderEpisodeNotesEditor(episodeId) {
     const entry = getEpisodeCacheEntry(episodeId);
-    const mode = state.episodeNotes.openMode || "append";
-
     const notes =
-      (mode === "edit")
-        ? (Array.isArray(entry?.draftNotes) && entry.draftNotes.length ? entry.draftNotes : [{ timestamp: "00:00:00", text: "" }])
-        : (Array.isArray(entry?.draftNotes) && entry.draftNotes.length ? entry.draftNotes : [{ timestamp: "00:00:00", text: "" }]);
+      Array.isArray(entry?.draftNotes) && entry.draftNotes.length
+        ? entry.draftNotes
+        : [{ timestamp: "00:00:00", text: "" }];
 
-    const rowsHtml = notes.map((n, idx) => {
-      const ts = escapeHtml(normalizeTimestamp(n?.timestamp));
-      const tx = escapeHtml(String(n?.text || ""));
-      return `
+    const rowsHtml = notes
+      .map((n, idx) => {
+        const ts = escapeHtml(normalizeTimestamp(n?.timestamp));
+        const tx = escapeHtml(String(n?.text || ""));
+        return `
         <div class="epnote-row epnote-row-stacked" data-epnote-row="${idx}">
           <div class="epnote-row-top">
-            <button class="epnote-add" type="button" title="Add row" aria-label="Add row" data-epnote-add="${escapeHtml(episodeId)}">👇🏻</button>
+            <button class="epnote-add" type="button" title="Add row" aria-label="Add row" data-epnote-add="${escapeHtml(
+              episodeId
+            )}">👇🏻</button>
 
             <input
               class="epnote-time"
@@ -1283,7 +1307,8 @@
           >${tx}</textarea>
         </div>
       `;
-    }).join("");
+      })
+      .join("");
 
     return `
       <div class="epnote-editor" data-epnote-editor="${escapeHtml(episodeId)}">
@@ -1433,7 +1458,8 @@
     requestAnimationFrame(() => {
       try {
         const li = document.querySelector(`.podcast-item[data-episode-id="${CSS.escape(episodeId)}"]`);
-        const textareas = li?.querySelectorAll(`textarea[data-epnote-text="${CSS.escape(episodeId)}"]`) || [];
+        const textareas =
+          li?.querySelectorAll(`textarea[data-epnote-text="${CSS.escape(episodeId)}"]`) || [];
         const last = textareas.length ? textareas[textareas.length - 1] : null;
         if (last) last.focus();
       } catch {}
@@ -1444,8 +1470,12 @@
     const li = document.querySelector(`.podcast-item[data-episode-id="${CSS.escape(episodeId)}"]`);
     if (!li) return [{ timestamp: "00:00:00", text: "" }];
 
-    const timeEls = Array.from(li.querySelectorAll(`input[data-epnote-time="${CSS.escape(episodeId)}"]`));
-    const textEls = Array.from(li.querySelectorAll(`textarea[data-epnote-text="${CSS.escape(episodeId)}"]`));
+    const timeEls = Array.from(
+      li.querySelectorAll(`input[data-epnote-time="${CSS.escape(episodeId)}"]`)
+    );
+    const textEls = Array.from(
+      li.querySelectorAll(`textarea[data-epnote-text="${CSS.escape(episodeId)}"]`)
+    );
 
     const rows = Math.max(timeEls.length, textEls.length);
     const out = [];
@@ -1624,11 +1654,11 @@
       state.filter = "all";
 
       state.others = Array.isArray(data?.othersPlaylists)
-        ? data.othersPlaylists.map(p => ({ ...p, ownerLabel: p.ownerLabel || "by others" }))
+        ? data.othersPlaylists.map((p) => ({ ...p, ownerLabel: p.ownerLabel || "by others" }))
         : [];
 
       state.yearSummary = Array.isArray(data?.yearSummaryPlaylists)
-        ? data.yearSummaryPlaylists.map(p => ({ ...p, ownerLabel: p.ownerLabel || "Spotify" }))
+        ? data.yearSummaryPlaylists.map((p) => ({ ...p, ownerLabel: p.ownerLabel || "Spotify" }))
         : [];
 
       state.episodeNotes.openEpisodeId = null;
