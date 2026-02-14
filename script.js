@@ -9,9 +9,8 @@
   const API_EPISODE_NOTE = "/api/episode-note";
 
   // ✅ IMPORTANT:
-  // /api/song-hours does NOT exist as a Pages Function right now.
-  // We compute exact song-hours client-side via an embedded Web Worker
-  // and NEVER call /api/song-hours.
+  // /api/song-hours does NOT exist as a Pages Function right now (GET falls back to HTML, POST is 405).
+  // So we compute exact song-hours client-side via Web Worker and NEVER call /api/song-hours.
 
   const PODCAST_PLAYLIST_ID = "2tHrihmpYzDbJ8rit7HtFR";
 
@@ -33,156 +32,6 @@
   // ✅ Notes auth (client-side) — stored per-session only.
   const SS_NOTES_AUTH_KEY = "spotify_notes_auth";
 
-  // ✅ Embedded Web Worker source (so we don't rely on /song-hours.js existing on the server)
-  // Fixes:
-  // - Worker fetch uses absolute URL built from apiBase (location.origin)
-  // - Avoids MIME/type issues + avoids "Failed to parse URL" for relative fetch in blob workers
-  const SONG_HOURS_WORKER_SOURCE = `
-    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-    function safeJsonParse(text) {
-      try { return text ? JSON.parse(text) : null; } catch { return null; }
-    }
-
-    function joinBase(base, path) {
-      const b = String(base || "").replace(/\\/+$/, "");
-      const p = String(path || "");
-      if (!b) return p;
-      if (!p) return b;
-      if (p.startsWith("/")) return b + p;
-      return b + "/" + p;
-    }
-
-    async function fetchPlaylistPage({ apiBase, playlistId, limit, offset }) {
-      const url = joinBase(apiBase, "/api/playlist");
-
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ playlistId, limit, offset })
-      });
-
-      const text = await res.text();
-      const data = safeJsonParse(text);
-
-      if (!res.ok || !data) {
-        const msg = (data && (data.message || data.error)) || text || ("HTTP " + res.status);
-        throw new Error("Playlist " + playlistId + " failed: " + msg);
-      }
-
-      const items = Array.isArray(data.items) ? data.items : [];
-
-      const nextOffset =
-        (Number.isFinite(Number(data.nextOffset)) ? Number(data.nextOffset) : null) ??
-        (Number.isFinite(Number(data.nextPageOffset)) ? Number(data.nextPageOffset) : null) ??
-        null;
-
-      const hasMore =
-        (typeof data.hasMore === "boolean" ? data.hasMore : null) ??
-        (typeof data.more === "boolean" ? data.more : null) ??
-        null;
-
-      return { items, nextOffset, hasMore };
-    }
-
-    function sumTrackMs(items) {
-      let ms = 0;
-      for (const it of items) {
-        if ((it?.type || "") !== "track") continue;
-        ms += Number(it?.durationMs) || 0;
-      }
-      return ms;
-    }
-
-    async function fetchPlaylistDurationMs(apiBase, playlistId, { limit = 200 } = {}) {
-      let totalMs = 0;
-      let offset = 0;
-      let safetyPages = 0;
-
-      while (true) {
-        safetyPages++;
-        if (safetyPages > 200) break;
-
-        const { items, nextOffset, hasMore } = await fetchPlaylistPage({
-          apiBase,
-          playlistId,
-          limit,
-          offset
-        });
-
-        totalMs += sumTrackMs(items);
-
-        const gotFullPage = items.length >= limit;
-
-        if (hasMore === true) {
-          offset = (nextOffset !== null) ? nextOffset : (offset + limit);
-          continue;
-        }
-
-        if (nextOffset !== null && nextOffset !== offset) {
-          offset = nextOffset;
-          continue;
-        }
-
-        if (gotFullPage) {
-          offset += limit;
-          continue;
-        }
-
-        break;
-      }
-
-      return totalMs;
-    }
-
-    self.onmessage = async (e) => {
-      const msg = e.data || {};
-      const apiBase = String(msg.apiBase || "").trim();
-      const playlistIds = Array.isArray(msg.playlistIds) ? msg.playlistIds : [];
-
-      const throttleMs = Number(msg.throttleMs);
-      const throttle = Number.isFinite(throttleMs) ? Math.max(0, throttleMs) : 120;
-
-      const limitIn = Number(msg.limit);
-      const limit = Number.isFinite(limitIn) ? Math.min(400, Math.max(50, Math.floor(limitIn))) : 200;
-
-      if (!apiBase) {
-        self.postMessage({ type: "error", message: "Missing apiBase (expected location.origin)." });
-        return;
-      }
-
-      try {
-        let totalMs = 0;
-
-        for (let i = 0; i < playlistIds.length; i++) {
-          const id = String(playlistIds[i] || "").trim();
-          if (!id) continue;
-
-          self.postMessage({
-            type: "progress",
-            done: i,
-            total: playlistIds.length,
-            playlistId: id,
-            msSoFar: totalMs
-          });
-
-          try {
-            totalMs += await fetchPlaylistDurationMs(apiBase, id, { limit });
-          } catch (err) {
-            await sleep(500);
-            totalMs += await fetchPlaylistDurationMs(apiBase, id, { limit });
-          }
-
-          if (throttle) await sleep(throttle);
-        }
-
-        self.postMessage({ type: "done", totalMs });
-      } catch (err) {
-        self.postMessage({ type: "error", message: String(err?.message || err) });
-      }
-    };
-  `;
-
   /***********************
    * DOM
    ***********************/
@@ -202,7 +51,6 @@
     // ✅ song-hours compute (client-side worker)
     songHours: {
       worker: null,
-      workerUrl: null, // blob URL so we can revoke later
       running: false,
       done: 0,
       total: 0,
@@ -212,7 +60,16 @@
 
     // Episode notes
     episodeNotes: {
+      // episodeId -> {
+      //   savedNotes:[{timestamp,text}],
+      //   draftNotes:[{timestamp,text}],
+      //   loadedSaved:boolean,
+      //   saving:boolean,
+      //   savedAt:number|null,
+      //   error:string|null
+      // }
       cache: Object.create(null),
+
       openEpisodeId: null,
 
       // ✅ "append" when opening via 💭 bubble (keep saved notes outside; draft empty)
@@ -288,10 +145,7 @@
       const hh = clampInt(parts[0], 0, 999, 0);
       const mm = clampInt(parts[1], 0, 59, 0);
       const ss = clampInt(parts[2], 0, 59, 0);
-      return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(
-        2,
-        "0"
-      )}`;
+      return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
     }
     return "00:00:00";
   }
@@ -396,6 +250,7 @@
             <div class="podcast-empty" id="podcastEmpty"></div>
             <div class="podcast-error" id="podcastError" hidden></div>
 
+            <!-- ✅ UL is the scroll container -->
             <ul class="podcast-list" id="podcastList"></ul>
           </div>
         </aside>
@@ -489,6 +344,7 @@
   }
 
   function getSongHoursDisplay(totals) {
+    // Prefer client-side exact if we computed it
     const exact = totals?.songMsExact;
     const approx = totals?.songMsApprox;
     const status = String(totals?.songHoursStatus || "");
@@ -499,9 +355,7 @@
       const approxLabel = `~${fmtHoursFromMs(approx)}`;
       const hint =
         status === "computing"
-          ? ` (computing… ${
-              state.songHours.total ? `${state.songHours.done}/${state.songHours.total}` : ""
-            })`
+          ? ` (computing… ${state.songHours.total ? `${state.songHours.done}/${state.songHours.total}` : ""})`
           : "";
       return { label: approxLabel, hint };
     }
@@ -566,18 +420,17 @@
 
   /***********************
    * Song-hours: client-side worker compute (NO /api/song-hours)
+   *
+   * ✅ FIX: Use an inline Blob Worker so it always loads as JS.
+   * This avoids: "Refused to execute script ... MIME type ('text/html')"
    ***********************/
   function stopSongHoursWorker() {
     try {
-      if (state.songHours.worker) state.songHours.worker.terminate();
+      if (state.songHours.worker) {
+        state.songHours.worker.terminate();
+      }
     } catch {}
-
-    if (state.songHours.workerUrl) {
-      try { URL.revokeObjectURL(state.songHours.workerUrl); } catch {}
-    }
-
     state.songHours.worker = null;
-    state.songHours.workerUrl = null;
     state.songHours.running = false;
     state.songHours.done = 0;
     state.songHours.total = 0;
@@ -588,13 +441,139 @@
   function ensureSongHoursWorker() {
     if (state.songHours.worker) return state.songHours.worker;
 
+    const WORKER_SOURCE = `
+      const API_PLAYLIST = "/api/playlist";
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+      function safeJsonParse(text) {
+        try { return text ? JSON.parse(text) : null; } catch { return null; }
+      }
+
+      async function fetchPlaylistPage({ playlistId, limit, offset }) {
+        const res = await fetch(API_PLAYLIST, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({ playlistId, limit, offset })
+        });
+
+        const text = await res.text();
+        const data = safeJsonParse(text);
+
+        if (!res.ok || !data) {
+          const msg = (data && (data.message || data.error)) || text || ("HTTP " + res.status);
+          throw new Error("Playlist " + playlistId + " failed: " + msg);
+        }
+
+        const items = Array.isArray(data.items) ? data.items : [];
+
+        const nextOffset =
+          (Number.isFinite(Number(data.nextOffset)) ? Number(data.nextOffset) : null) ??
+          (Number.isFinite(Number(data.nextPageOffset)) ? Number(data.nextPageOffset) : null) ??
+          null;
+
+        const hasMore =
+          (typeof data.hasMore === "boolean" ? data.hasMore : null) ??
+          (typeof data.more === "boolean" ? data.more : null) ??
+          null;
+
+        return { items, nextOffset, hasMore };
+      }
+
+      function sumTrackMs(items) {
+        let ms = 0;
+        for (const it of items) {
+          if ((it?.type || "") !== "track") continue;
+          ms += Number(it?.durationMs) || 0;
+        }
+        return ms;
+      }
+
+      async function fetchPlaylistDurationMs(playlistId, { limit = 200 } = {}) {
+        let totalMs = 0;
+        let offset = 0;
+        let safetyPages = 0;
+
+        while (true) {
+          safetyPages++;
+          if (safetyPages > 200) break;
+
+          const { items, nextOffset, hasMore } = await fetchPlaylistPage({
+            playlistId,
+            limit,
+            offset
+          });
+
+          totalMs += sumTrackMs(items);
+
+          const gotFullPage = items.length >= limit;
+
+          if (hasMore === true) {
+            offset = (nextOffset !== null) ? nextOffset : (offset + limit);
+            continue;
+          }
+
+          if (nextOffset !== null && nextOffset !== offset) {
+            offset = nextOffset;
+            continue;
+          }
+
+          if (gotFullPage) {
+            offset += limit;
+            continue;
+          }
+
+          break;
+        }
+
+        return totalMs;
+      }
+
+      self.onmessage = async (e) => {
+        const msg = e.data || {};
+        const playlistIds = Array.isArray(msg.playlistIds) ? msg.playlistIds : [];
+        const throttleMs = Number(msg.throttleMs);
+        const throttle = Number.isFinite(throttleMs) ? Math.max(0, throttleMs) : 120;
+
+        const limitIn = Number(msg.limit);
+        const limit = Number.isFinite(limitIn) ? Math.min(400, Math.max(50, Math.floor(limitIn))) : 200;
+
+        try {
+          let totalMs = 0;
+
+          for (let i = 0; i < playlistIds.length; i++) {
+            const id = String(playlistIds[i] || "").trim();
+            if (!id) continue;
+
+            self.postMessage({
+              type: "progress",
+              done: i,
+              total: playlistIds.length,
+              playlistId: id,
+              msSoFar: totalMs
+            });
+
+            try {
+              totalMs += await fetchPlaylistDurationMs(id, { limit });
+            } catch (err) {
+              await sleep(500);
+              totalMs += await fetchPlaylistDurationMs(id, { limit });
+            }
+
+            if (throttle) await sleep(throttle);
+          }
+
+          self.postMessage({ type: "done", totalMs });
+        } catch (err) {
+          self.postMessage({ type: "error", message: String(err?.message || err) });
+        }
+      };
+    `;
+
     try {
-      const blob = new Blob([SONG_HOURS_WORKER_SOURCE], { type: "text/javascript" });
+      const blob = new Blob([WORKER_SOURCE], { type: "text/javascript" });
       const url = URL.createObjectURL(blob);
       const w = new Worker(url);
-
-      state.songHours.worker = w;
-      state.songHours.workerUrl = url;
+      URL.revokeObjectURL(url);
 
       w.onmessage = (e) => {
         const msg = e.data || {};
@@ -630,7 +609,7 @@
         if (msg.type === "error") {
           state.songHours.running = false;
           state.songHours.lastError = String(msg.message || "Unknown worker error");
-          if (state.snapshot?.totals) state.snapshot.totals.songHoursStatus = "approx";
+          state.snapshot.totals.songHoursStatus = "approx";
           console.warn("song-hours worker error:", state.songHours.lastError);
           renderStatistics();
         }
@@ -644,6 +623,7 @@
         renderStatistics();
       };
 
+      state.songHours.worker = w;
       return w;
     } catch (e) {
       console.warn("Failed to start song-hours worker:", e);
@@ -669,6 +649,8 @@
 
   function startSongHoursComputeClientSide() {
     if (!state.snapshot?.totals) return;
+
+    // If we already have exact, don’t recompute
     if (typeof state.snapshot.totals.songMsExact === "number") return;
 
     const playlistIds = gatherCorePlaylistIdsForSongHours();
@@ -687,7 +669,6 @@
     state.songHours.lastError = null;
 
     w.postMessage({
-      apiBase: location.origin,
       playlistIds,
       throttleMs: 120,
       limit: 200
@@ -1026,22 +1007,18 @@
     const notes = savedNotesForEpisode(episodeId);
     if (!notes.length) return "";
 
-    const lines = notes
-      .slice(0, 6)
-      .map((n) => {
-        const ts = escapeHtml(n.timestamp);
-        const tx = escapeHtml(n.text);
-        return `
+    const lines = notes.slice(0, 6).map((n) => {
+      const ts = escapeHtml(n.timestamp);
+      const tx = escapeHtml(n.text);
+      return `
         <div class="epnote-saved-line">
           <div class="epnote-saved-ts">${ts}</div>
           <div class="epnote-saved-text">${tx}</div>
         </div>
       `;
-      })
-      .join("");
+    }).join("");
 
-    const more =
-      notes.length > 6 ? `<div class="epnote-saved-more">…and ${notes.length - 6} more</div>` : "";
+    const more = notes.length > 6 ? `<div class="epnote-saved-more">…and ${notes.length - 6} more</div>` : "";
 
     return `
       <div class="epnote-saved" data-epnote-saved="${escapeHtml(episodeId)}">
@@ -1171,9 +1148,7 @@
     const dur = fmtDurationFromMs(it.durationMs || 0);
     const url = it.url || "#";
 
-    const isOpen =
-      state.episodeNotes.openEpisodeId && episodeId && state.episodeNotes.openEpisodeId === episodeId;
-
+    const isOpen = state.episodeNotes.openEpisodeId && episodeId && state.episodeNotes.openEpisodeId === episodeId;
     const hasNotes = episodeId ? episodeHasNotes(episodeId) : false;
     const noteOpacity = hasNotes ? 1 : 0.25;
 
@@ -1184,19 +1159,20 @@
 
     const mode = isOpen ? state.episodeNotes.openMode : null;
 
-    const showSavedBlock = !!episodeId && hasNotes && (!isOpen || mode === "append");
-    const savedBlock = showSavedBlock ? renderSavedNotesBlock(episodeId) : "";
+    // ✅ FIX: Saved notes should ONLY be visible while the panel is open (append mode).
+    // When you click 💭 again to close, this will hide saved notes too.
+    const showSavedBlock = !!episodeId && isOpen && mode === "append" && hasNotes;
 
+    const savedBlock = showSavedBlock ? renderSavedNotesBlock(episodeId) : "";
     const editorHtml = isOpen && episodeId ? renderEpisodeNotesEditor(episodeId) : "";
 
-    const statusLine =
-      isOpen && episodeId
-        ? `
+    const statusLine = isOpen && episodeId
+      ? `
         <div class="epnote-status" data-epnote-status="${escapeHtml(episodeId)}">
-          ${saving ? "Saving…" : err ? `Error: ${escapeHtml(err)}` : savedAt ? "Saved ✓" : ""}
+          ${saving ? "Saving…" : (err ? `Error: ${escapeHtml(err)}` : (savedAt ? "Saved ✓" : ""))}
         </div>
       `
-        : "";
+      : "";
 
     return `
       <li class="podcast-item" data-episode-id="${escapeHtml(episodeId)}">
@@ -1244,14 +1220,10 @@
       if (img.__fallbackBound) return;
       img.__fallbackBound = true;
 
-      img.addEventListener(
-        "error",
-        () => {
-          if (img.src && img.src.includes("spotify_logo.png")) return;
-          img.src = FALLBACK;
-        },
-        { passive: true }
-      );
+      img.addEventListener("error", () => {
+        if (img.src && img.src.includes("spotify_logo.png")) return;
+        img.src = FALLBACK;
+      }, { passive: true });
     });
   }
 
@@ -1260,21 +1232,20 @@
    ***********************/
   function renderEpisodeNotesEditor(episodeId) {
     const entry = getEpisodeCacheEntry(episodeId);
-    const notes =
-      Array.isArray(entry?.draftNotes) && entry.draftNotes.length
-        ? entry.draftNotes
-        : [{ timestamp: "00:00:00", text: "" }];
+    const mode = state.episodeNotes.openMode || "append";
 
-    const rowsHtml = notes
-      .map((n, idx) => {
-        const ts = escapeHtml(normalizeTimestamp(n?.timestamp));
-        const tx = escapeHtml(String(n?.text || ""));
-        return `
+    const notes =
+      (mode === "edit")
+        ? (Array.isArray(entry?.draftNotes) && entry.draftNotes.length ? entry.draftNotes : [{ timestamp: "00:00:00", text: "" }])
+        : (Array.isArray(entry?.draftNotes) && entry.draftNotes.length ? entry.draftNotes : [{ timestamp: "00:00:00", text: "" }]);
+
+    const rowsHtml = notes.map((n, idx) => {
+      const ts = escapeHtml(normalizeTimestamp(n?.timestamp));
+      const tx = escapeHtml(String(n?.text || ""));
+      return `
         <div class="epnote-row epnote-row-stacked" data-epnote-row="${idx}">
           <div class="epnote-row-top">
-            <button class="epnote-add" type="button" title="Add row" aria-label="Add row" data-epnote-add="${escapeHtml(
-              episodeId
-            )}">👇🏻</button>
+            <button class="epnote-add" type="button" title="Add row" aria-label="Add row" data-epnote-add="${escapeHtml(episodeId)}">👇🏻</button>
 
             <input
               class="epnote-time"
@@ -1303,8 +1274,7 @@
           >${tx}</textarea>
         </div>
       `;
-      })
-      .join("");
+    }).join("");
 
     return `
       <div class="epnote-editor" data-epnote-editor="${escapeHtml(episodeId)}">
@@ -1313,52 +1283,38 @@
     `;
   }
 
-  /***********************
-   * ✅ FIX: robust click delegation (works even if user clicks the emoji/text node)
-   * This is why your "click bubble again to close" wasn't firing reliably.
-   ***********************/
   function wirePodcastInteractions(listEl) {
     if (listEl.__epnoteBound) return;
     listEl.__epnoteBound = true;
 
     listEl.addEventListener("click", async (e) => {
-      const rawTarget = e.target;
-      const targetEl =
-        rawTarget && rawTarget.nodeType === 1
-          ? rawTarget
-          : rawTarget?.parentElement || null;
+      const t = e.target;
 
-      if (!targetEl) return;
-
-      const toggleBtn = targetEl.closest?.("[data-epnote-toggle]");
-      if (toggleBtn) {
+      const toggleId = t?.getAttribute?.("data-epnote-toggle");
+      if (toggleId) {
         e.preventDefault();
-        const id = toggleBtn.getAttribute("data-epnote-toggle");
-        if (id) await toggleEpisodeEditor(id); // 💭 toggles open/close
+        await toggleEpisodeEditor(toggleId); // 💭 opens/closes APPEND mode
         return;
       }
 
-      const editBtn = targetEl.closest?.("[data-epnote-edit]");
-      if (editBtn) {
+      const editId = t?.getAttribute?.("data-epnote-edit");
+      if (editId) {
         e.preventDefault();
-        const id = editBtn.getAttribute("data-epnote-edit");
-        if (id) await openEditorForExistingNotes(id); // 📝 edit mode
+        await openEditorForExistingNotes(editId); // 📝 opens EDIT mode
         return;
       }
 
-      const addBtn = targetEl.closest?.("[data-epnote-add]");
-      if (addBtn) {
+      const addId = t?.getAttribute?.("data-epnote-add");
+      if (addId) {
         e.preventDefault();
-        const id = addBtn.getAttribute("data-epnote-add");
-        if (id) addEpisodeRow(id);
+        addEpisodeRow(addId);
         return;
       }
 
-      const saveBtn = targetEl.closest?.("[data-epnote-save]");
-      if (saveBtn) {
+      const saveId = t?.getAttribute?.("data-epnote-save");
+      if (saveId) {
         e.preventDefault();
-        const id = saveBtn.getAttribute("data-epnote-save");
-        if (id) await saveEpisodeFromDom(id);
+        await saveEpisodeFromDom(saveId);
         return;
       }
     });
@@ -1393,6 +1349,7 @@
       renderPodcastColumn();
       await ensureSavedLoadedMaybe(episodeId);
 
+      // ✅ populate editor with saved notes for editing
       entry.draftNotes = normalizeNotesArray(entry.savedNotes);
     } catch (err) {
       entry.error = String(err?.message || err);
@@ -1412,7 +1369,7 @@
   async function toggleEpisodeEditor(episodeId) {
     if (!episodeId) return;
 
-    // ✅ close if same episode is open
+    // ✅ close if same
     if (state.episodeNotes.openEpisodeId === episodeId) {
       state.episodeNotes.openEpisodeId = null;
       state.episodeNotes.openMode = null;
@@ -1425,12 +1382,12 @@
 
     const entry = getEpisodeCacheEntry(episodeId);
 
-    // append mode draft is always blank by default
+    // ✅ append mode draft is always blank by default
     entry.draftNotes = [{ timestamp: "00:00:00", text: "" }];
 
     renderPodcastColumn();
 
-    // load saved notes (for the saved block), but do not put them into textbox
+    // ✅ load saved notes for preview (but do not inject into textarea)
     try {
       entry.error = null;
       renderPodcastColumn();
@@ -1466,8 +1423,7 @@
     requestAnimationFrame(() => {
       try {
         const li = document.querySelector(`.podcast-item[data-episode-id="${CSS.escape(episodeId)}"]`);
-        const textareas =
-          li?.querySelectorAll(`textarea[data-epnote-text="${CSS.escape(episodeId)}"]`) || [];
+        const textareas = li?.querySelectorAll(`textarea[data-epnote-text="${CSS.escape(episodeId)}"]`) || [];
         const last = textareas.length ? textareas[textareas.length - 1] : null;
         if (last) last.focus();
       } catch {}
@@ -1478,12 +1434,8 @@
     const li = document.querySelector(`.podcast-item[data-episode-id="${CSS.escape(episodeId)}"]`);
     if (!li) return [{ timestamp: "00:00:00", text: "" }];
 
-    const timeEls = Array.from(
-      li.querySelectorAll(`input[data-epnote-time="${CSS.escape(episodeId)}"]`)
-    );
-    const textEls = Array.from(
-      li.querySelectorAll(`textarea[data-epnote-text="${CSS.escape(episodeId)}"]`)
-    );
+    const timeEls = Array.from(li.querySelectorAll(`input[data-epnote-time="${CSS.escape(episodeId)}"]`));
+    const textEls = Array.from(li.querySelectorAll(`textarea[data-epnote-text="${CSS.escape(episodeId)}"]`));
 
     const rows = Math.max(timeEls.length, textEls.length);
     const out = [];
