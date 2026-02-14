@@ -99,6 +99,39 @@
       .replace(/'/g, "&#39;");
   }
 
+  // ✅ NEW: render note text where URLs become a clickable 🔗 emoji
+  // - Keeps storage unchanged (we only transform at render-time)
+  // - Supports multiple URLs
+  // - Preserves newlines in display via <br>
+  function renderTextWithLinkEmojis(raw) {
+    const text = String(raw ?? "");
+
+    // Basic URL matcher (http/https)
+    const re = /\bhttps?:\/\/[^\s<>"')\]]+/gi;
+
+    let out = "";
+    let last = 0;
+
+    for (const m of text.matchAll(re)) {
+      const url = m[0];
+      const idx = m.index ?? 0;
+
+      // Non-url text
+      out += escapeHtml(text.slice(last, idx));
+
+      // URL -> 🔗 emoji anchor
+      const safeUrl = escapeHtml(url);
+      out += `<a class="epnote-link-emoji" href="${safeUrl}" target="_blank" rel="noopener noreferrer" title="${safeUrl}" aria-label="Open link">🔗</a>`;
+
+      last = idx + url.length;
+    }
+
+    out += escapeHtml(text.slice(last));
+
+    // Preserve newline display in saved notes view
+    return out.replace(/\n/g, "<br>");
+  }
+
   function fmtHoursFromMs(ms) {
     const h = (Number(ms) || 0) / 3600000;
     return `${h.toFixed(h >= 10 ? 0 : 1)}h`;
@@ -1006,10 +1039,11 @@
   function renderSavedNotesBlock(episodeId) {
     const notes = savedNotesForEpisode(episodeId);
     if (!notes.length) return "";
-  
+
     const lines = notes.map((n) => {
       const ts = escapeHtml(n.timestamp);
-      const tx = escapeHtml(n.text);
+      // ✅ URL -> 🔗 emoji (clickable), preserve newlines
+      const tx = renderTextWithLinkEmojis(n.text);
       return `
         <div class="epnote-saved-line">
           <div class="epnote-saved-ts">${ts}</div>
@@ -1017,7 +1051,7 @@
         </div>
       `;
     }).join("");
-  
+
     return `
       <div class="epnote-saved" data-epnote-saved="${escapeHtml(episodeId)}">
         <div class="epnote-saved-head">
@@ -1283,6 +1317,35 @@
   function wirePodcastInteractions(listEl) {
     if (listEl.__epnoteBound) return;
     listEl.__epnoteBound = true;
+
+    // ✅ NEW: Force Enter to always insert a newline in the notes textarea
+    // This is a hard override so nothing upstream can "steal" Enter.
+    listEl.addEventListener("keydown", (e) => {
+      const el = e.target;
+      if (!el || !el.classList || !el.classList.contains("epnote-text")) return;
+
+      // Plain Enter inserts newline; Shift+Enter also inserts newline by default, so we leave it alone.
+      if (e.key === "Enter" && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        // If browser default is working, this still works fine; but if something else prevents default,
+        // we force it here.
+        e.preventDefault();
+        e.stopPropagation();
+
+        const start = typeof el.selectionStart === "number" ? el.selectionStart : (el.value || "").length;
+        const end = typeof el.selectionEnd === "number" ? el.selectionEnd : (el.value || "").length;
+        const v = String(el.value || "");
+        el.value = v.slice(0, start) + "\n" + v.slice(end);
+
+        const pos = start + 1;
+        try {
+          el.selectionStart = el.selectionEnd = pos;
+        } catch {}
+
+        // Keep your auto-height behavior consistent
+        el.style.height = "auto";
+        el.style.height = `${Math.min(220, el.scrollHeight)}px`;
+      }
+    }, true);
 
     listEl.addEventListener("click", async (e) => {
       const t = e.target;
