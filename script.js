@@ -1109,7 +1109,7 @@
   function extractPaging(data) {
     const nextOffset =
       (Number.isFinite(Number(data?.nextOffset)) ? Number(data.nextOffset) : null) ??
-      (Number.isFinite(Number(data?.nextPageOffset)) ? data.nextPageOffset : null) ??
+      (Number.isFinite(Number(data?.nextPageOffset)) ? Number(data.nextPageOffset) : null) ??
       null;
 
     const hasMore =
@@ -1330,100 +1330,25 @@
       head.appendChild(controls);
     }
 
-    // Clear prior controls
-    controls.innerHTML = "";
-
-    // --- Title left/right arrows (single-step scroll) ---
-    const createArrow = (label, dataAttr, titleText) => {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = "pod-head-arrow";
-      b.textContent = label;
-      b.setAttribute("data-pod-scroll", dataAttr);
-      b.title = titleText || "";
-      b.style.border = "1px solid rgba(255,255,255,0.06)";
-      b.style.background = "rgba(0,0,0,0.04)";
-      b.style.padding = "4px 8px";
-      b.style.borderRadius = "8px";
-      b.style.cursor = "pointer";
-      return b;
-    };
-
-    // Title area: "<" [Podcast Episodes] ">"
-    const titleGroup = document.createElement("div");
-    titleGroup.style.display = "inline-flex";
-    titleGroup.style.gap = "8px";
-    titleGroup.style.alignItems = "center";
-
-    const leftArrowTitle = createArrow("‹", "title-left", "Scroll up 1");
-    const rightArrowTitle = createArrow("›", "title-right", "Scroll down 1");
-
-    const titleLabel = document.createElement("div");
-    titleLabel.style.fontWeight = "800";
-    titleLabel.style.fontSize = "14px";
-    titleLabel.style.whiteSpace = "nowrap";
-    titleLabel.style.overflow = "hidden";
-    titleLabel.style.textOverflow = "ellipsis";
-    titleLabel.style.padding = "4px 6px";
-    titleLabel.setAttribute("data-pod-title-label", "1");
-    // label text is in #podcastTitle already — we keep that element as visual title,
-    // but we include a copy here for keyboard focus and grouping.
-    titleLabel.textContent = document.getElementById("podcastTitle")?.textContent || "Podcast Episodes";
-
-    titleGroup.appendChild(leftArrowTitle);
-    titleGroup.appendChild(titleLabel);
-    titleGroup.appendChild(rightArrowTitle);
-
-    controls.appendChild(titleGroup);
-
-    // --- Count with left/right arrows (jumps) ---
-    const countGroup = document.createElement("div");
-    countGroup.style.display = "inline-flex";
-    countGroup.style.gap = "8px";
-    countGroup.style.alignItems = "center";
-    countGroup.style.marginLeft = "8px";
-
-    const countLeft = createArrow("<", "count-left", "Jump up 5");
-    const countRight = createArrow(">", "count-right", "Jump down 5");
-
-    const countLabel = document.createElement("div");
-    countLabel.id = "podcastCountLabel";
-    countLabel.style.color = "var(--muted2)";
-    countLabel.style.fontSize = "13px";
-    countLabel.style.padding = "4px 6px";
-    countLabel.textContent = document.getElementById("podcastSub")?.textContent || "– items";
-
-    countGroup.appendChild(countLeft);
-    countGroup.appendChild(countLabel);
-    countGroup.appendChild(countRight);
-
-    controls.appendChild(countGroup);
-
-    // small spacer
-    controls.appendChild(document.createTextNode(" "));
-
-    // --- Sort controls: Released then Added (keep arrows) ---
     const pref = getPodcastSortPref();
-
-    // helper to create the sort control for a key (label param contains emoji+text)
-    const sortControl = (key, labelText) => {
+    const button = (key, label) => {
+      // key = "released" | "added" | "name"
       const wrapper = document.createElement("div");
       wrapper.style.display = "inline-flex";
       wrapper.style.gap = "6px";
       wrapper.style.alignItems = "center";
 
+      // key label (acts as a quick 'select key' toggle to switch to that key and keep direction)
       const keyBtn = document.createElement("button");
       keyBtn.className = "pod-sort-key";
       keyBtn.type = "button";
-      keyBtn.textContent = labelText;
+      keyBtn.textContent = label;
       keyBtn.setAttribute("data-pod-sort-key", key);
       keyBtn.setAttribute("aria-pressed", String(pref.key === key));
       if (pref.key === key) keyBtn.style.color = "var(--spotify-green)";
-      keyBtn.style.background = "transparent";
-      keyBtn.style.border = "none";
-      keyBtn.style.cursor = "pointer";
       wrapper.appendChild(keyBtn);
 
+      // up arrow (asc)
       const up = document.createElement("button");
       up.className = "pod-sort-arrow";
       up.type = "button";
@@ -1435,6 +1360,7 @@
         up.style.color = "var(--spotify-green)";
       }
 
+      // down arrow (desc)
       const down = document.createElement("button");
       down.className = "pod-sort-arrow";
       down.type = "button";
@@ -1452,15 +1378,13 @@
       return wrapper;
     };
 
-    controls.appendChild(sortControl("released", "🍃 Released"));
-    // delimiter
-    const dot = document.createElement("span");
-    dot.textContent = "•";
-    dot.style.color = "var(--muted2)";
-    controls.appendChild(dot);
-    controls.appendChild(sortControl("added", "➕ Added"));
+    // clear then append in desired order: Released • Added • Name
+    controls.innerHTML = "";
+    controls.appendChild(button("released", "🍃 Released"));
+    controls.appendChild(document.createTextNode("•"));
+    controls.appendChild(button("added", "➕ Added"));
 
-    // wire click handlers for sort controls
+    // wire click handlers
     controls.querySelectorAll(".pod-sort-arrow, .pod-sort-key").forEach((el) => {
       el.addEventListener("click", async (ev) => {
         const k = el.getAttribute("data-pod-sort-key");
@@ -1481,44 +1405,6 @@
         renderPodcastColumn();
       });
     });
-
-    // wire scroll arrows (title arrows -> ±1 item; count arrows -> ±5 items)
-    controls.querySelectorAll("[data-pod-scroll]").forEach((btn) => {
-      btn.addEventListener("click", (ev) => {
-        const action = btn.getAttribute("data-pod-scroll");
-        if (!action) return;
-        if (action === "title-left") scrollPodcastListByItems(-1);
-        else if (action === "title-right") scrollPodcastListByItems(1);
-        else if (action === "count-left") scrollPodcastListByItems(-5);
-        else if (action === "count-right") scrollPodcastListByItems(5);
-      });
-    });
-
-    // update textual copies to reflect live DOM (title & count)
-    const mainTitle = document.getElementById("podcastTitle");
-    if (mainTitle) titleLabel.textContent = mainTitle.textContent || "Podcast Episodes";
-
-    const subEl = document.getElementById("podcastSub");
-    if (subEl) countLabel.textContent = subEl.textContent || "– items";
-  }
-
-  // helper: scroll the podcast list by N items (positive => down; negative => up)
-  function scrollPodcastListByItems(n) {
-    try {
-      const list = document.getElementById("podcastList");
-      if (!list) return;
-
-      // find an item to measure height
-      const first = list.querySelector(".podcast-item");
-      const itemHeight = first ? first.offsetHeight : (parseInt(getComputedStyle(list).getPropertyValue("line-height")) || 80);
-      const gap = parseInt(getComputedStyle(list).getPropertyValue("gap")) || 10;
-
-      const delta = Math.round(n) * (itemHeight + gap);
-      list.scrollBy({ top: delta, left: 0, behavior: "smooth" });
-    } catch (e) {
-      // fallback: quick scroll
-      try { const list = document.getElementById("podcastList"); if (list) list.scrollTop += n * 80; } catch {}
-    }
   }
 
   // ----------------------------
@@ -1596,10 +1482,8 @@
       items = originalItems.slice();
     }
 
-    // show count (and update header controls' count copy)
+    // show count
     sub.textContent = `${items.length} items`;
-    const countLabelCopy = document.getElementById("podcastCountLabel");
-    if (countLabelCopy) countLabelCopy.textContent = `${items.length} items`;
 
     // render items
     list.innerHTML = items.map((it) => renderPodcastItem(it)).join("");
