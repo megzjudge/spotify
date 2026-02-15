@@ -88,13 +88,33 @@
 
   /***********************
    * Podcast sort preference helpers (persist to localStorage)
-   * Only affects the podcast column rendering.
+   * Format stored: "field:dir" where field is "added"|"released"|"name" and dir is "asc"|"desc"
    ***********************/
-  function getPodcastSortPref() {
-    try { return localStorage.getItem("podcast_sort") || "added"; } catch { return "added"; }
+  function getPodcastSortPrefRaw() {
+    try {
+      const v = localStorage.getItem("podcast_sort") || "added:desc";
+      return String(v || "added:desc");
+    } catch {
+      return "added:desc";
+    }
   }
-  function setPodcastSortPref(v) {
-    try { localStorage.setItem("podcast_sort", String(v || "added")); } catch {}
+
+  function getPodcastSortPref() {
+    const raw = getPodcastSortPrefRaw();
+    const [field = "added", dir = "desc"] = raw.split(":");
+    return { field, dir: dir === "asc" ? "asc" : "desc" };
+  }
+
+  function setPodcastSortPrefObj(obj) {
+    try {
+      const field = String(obj?.field || "added");
+      const dir = obj?.dir === "asc" ? "asc" : "desc";
+      localStorage.setItem("podcast_sort", `${field}:${dir}`);
+    } catch {}
+  }
+
+  function setPodcastSortPref(field, dir) {
+    setPodcastSortPrefObj({ field, dir });
   }
 
   /***********************
@@ -289,13 +309,24 @@
           <div class="panel-body col-scroll-body">
 
             <!-- Podcast-level sort control (podcast-only) -->
-            <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
-              <label style="color:var(--muted2); font-size:13px; white-space:nowrap;">Sort</label>
-              <select id="podcastSortSelect" style="min-width:170px; border-radius:999px; padding:6px 10px;">
-                <option value="added">➕ Added (newest)</option>
-                <option value="released">🍃 Released (newest)</option>
-                <option value="name">A → Z (title)</option>
-              </select>
+            <div id="podcastSortControls" style="display:flex; align-items:center; gap:12px; margin-bottom:10px; color:var(--muted2); font-size:13px;">
+              <div style="display:flex; align-items:center; gap:8px; white-space:nowrap;">
+                <span style="font-weight:700;">🍃 Released</span>
+                <button class="pod-sort-arrow" data-sort-field="released" data-sort-dir="asc" title="Released ascending">▲</button>
+                <button class="pod-sort-arrow" data-sort-field="released" data-sort-dir="desc" title="Released descending">▼</button>
+              </div>
+
+              <div style="display:flex; align-items:center; gap:10px; color:var(--muted2);">
+                <span style="opacity:0.6;">•</span>
+              </div>
+
+              <div style="display:flex; align-items:center; gap:8px; white-space:nowrap;">
+                <span style="font-weight:700;">➕ Added</span>
+                <button class="pod-sort-arrow" data-sort-field="added" data-sort-dir="asc" title="Added ascending">▲</button>
+                <button class="pod-sort-arrow" data-sort-field="added" data-sort-dir="desc" title="Added descending">▼</button>
+              </div>
+
+              <div style="margin-left:auto; color:var(--muted2); font-size:13px;" id="podcastSortIndicator"></div>
             </div>
 
             <div class="podcast-head" id="podcastHead" hidden>
@@ -349,18 +380,20 @@
       if (e.key === "Escape") closeModal();
     });
 
-    // Wire podcast sort select to only affect podcast column and persist choice
-    const sortSel = document.getElementById("podcastSortSelect");
-    if (sortSel) {
-      // initialize to persisted pref
-      try { sortSel.value = getPodcastSortPref(); } catch {}
-      sortSel.addEventListener("change", (ev) => {
-        const v = ev.target.value;
-        setPodcastSortPref(v);
-        // only re-render podcast column (do not touch playlists)
+    // Wire sort arrow buttons
+    const arrows = document.querySelectorAll(".pod-sort-arrow");
+    arrows.forEach((btn) => {
+      btn.addEventListener("click", (ev) => {
+        const field = btn.getAttribute("data-sort-field") || "added";
+        const dir = btn.getAttribute("data-sort-dir") === "asc" ? "asc" : "desc";
+        setPodcastSortPref(field, dir);
+        renderPodcastSortIndicator();
         renderPodcastColumn();
       });
-    }
+    });
+
+    // Ensure the on-load indicator shows current pref
+    requestAnimationFrame(() => renderPodcastSortIndicator());
   }
 
   /***********************
@@ -1286,7 +1319,7 @@
         offset = nextOffset;
       }
   
-      // Sort same as before
+      // Sort same as before by default 'added' behavior if addedAt present
       const anyAddedAt = allEpisodes.some((x) => !!x?.addedAt);
       if (anyAddedAt) {
         allEpisodes.sort((a, b) => {
@@ -1302,6 +1335,16 @@
     } catch (e) {
       state.podcast.error = String(e?.message || e);
     }
+  }
+
+  // Helper to render current sort indicator text
+  function renderPodcastSortIndicator() {
+    const el = document.getElementById("podcastSortIndicator");
+    if (!el) return;
+    const { field, dir } = getPodcastSortPref();
+    const label = field === "released" ? "🍃 Released" : (field === "name" ? "A → Z" : "➕ Added");
+    const arrow = dir === "asc" ? "▲" : "▼";
+    el.textContent = `${label} ${arrow}`;
   }
 
   // ----------------------------
@@ -1356,27 +1399,28 @@
     title.textContent = p.name || "Podcast Episodes";
 
     // Apply podcast-only sort preference (do not mutate original array)
-    const pref = getPodcastSortPref(); // "added" | "released" | "name"
+    const pref = getPodcastSortPref(); // {field,dir}
     let items = originalItems.slice();
 
-    if (pref === "added") {
-      // newest added first (if addedAt exists)
+    if (pref.field === "added") {
       items.sort((a, b) => {
         const ta = a?.addedAt ? Date.parse(a.addedAt) : 0;
         const tb = b?.addedAt ? Date.parse(b.addedAt) : 0;
-        return tb - ta;
+        return pref.dir === "asc" ? ta - tb : tb - ta;
       });
-    } else if (pref === "released") {
-      // newest release first (use releaseDate or release_date if available)
+    } else if (pref.field === "released") {
       items.sort((a, b) => {
         const ra = a?.releaseDate || a?.release_date || a?.publishedAt || a?.published_at || null;
         const rb = b?.releaseDate || b?.release_date || b?.publishedAt || b?.published_at || null;
         const ta = ra ? Date.parse(ra) : 0;
         const tb = rb ? Date.parse(rb) : 0;
-        return tb - ta;
+        return pref.dir === "asc" ? ta - tb : tb - ta;
       });
-    } else if (pref === "name") {
-      items.sort((a,b) => String((a?.name||"")).localeCompare(String((b?.name||"")), undefined, { sensitivity: 'base' }));
+    } else if (pref.field === "name") {
+      items.sort((a,b) => {
+        const cmp = String((a?.name||"")).localeCompare(String((b?.name||"")), undefined, { sensitivity: 'base' });
+        return pref.dir === "asc" ? cmp : -cmp;
+      });
     } else {
       // default fallback: keep server order
       items = originalItems.slice();
@@ -1389,6 +1433,7 @@
     list.innerHTML = items.map((it) => renderPodcastItem(it)).join("");
     wirePodcastInteractions(list);
     wirePodcastThumbFallbacks(list);
+    renderPodcastSortIndicator();
   }
 
   // ----------------------------
@@ -1406,6 +1451,7 @@
     const addedAtRaw = it.addedAt || it.added_at || it.added || null;
     const releaseRaw = it.releaseDate || it.release_date || it.publishedAt || it.published_at || null;
 
+    // Hover titles show the raw date string; we hide full date as text but expose via hover.
     const addedEmoji = addedAtRaw ? `<span class="pod-meta-emoji" title="Added to playlist: ${escapeHtml(String(addedAtRaw))}">➕</span>` : "";
     const releaseEmoji = releaseRaw ? `<span class="pod-meta-emoji" title="Release date: ${escapeHtml(String(releaseRaw))}">🍃</span>` : "";
 
@@ -1940,11 +1986,9 @@
     blankUntilClick();
     if (refreshButton) refreshButton.addEventListener("click", refreshFromSpotify);
 
-    // If the page already built shell, ensure podcast sort select reflects stored preference
-    // (buildShell also initializes it, but in case of reload, ensure renderPodcastColumn picks up pref)
+    // If the page already built shell, ensure podcast sort indicator reflects stored preference
     try {
-      const sel = document.getElementById("podcastSortSelect");
-      if (sel) sel.value = getPodcastSortPref();
+      renderPodcastSortIndicator();
     } catch {}
   });
 })();
