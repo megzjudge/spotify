@@ -375,6 +375,14 @@ main {
 }
 
 /* =========================
+   Small additions for podcast meta emojis & spacing
+========================= */
+
+.pod-meta-emoji { display:inline-block; margin-right:6px; line-height:1; cursor:default; }
+.pod-meta-emojis { vertical-align:middle; }
+.podcast-item-sub .epnote-bubble { vertical-align: middle; margin-left:6px; }
+
+/* =========================
    Cards (playlist cards)
 ========================= */
 
