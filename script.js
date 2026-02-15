@@ -229,15 +229,15 @@
 
   function buildShell() {
     if (!appMain) return;
-
+  
     appMain.innerHTML = `
       <p class="status" id="statusMessage"></p>
-
+  
       <div class="app-grid">
-
+  
         <!-- LEFT COLUMN -->
         <div class="col col-left">
-
+  
           <section class="panel">
             <div class="panel-header">
               <h2 class="panel-title">Statistics</h2>
@@ -246,7 +246,7 @@
               <div class="stats-grid" id="statsGrid"></div>
             </div>
           </section>
-
+  
           <section class="panel" style="margin-top:16px;">
             <div class="panel-header">
               <h2 class="panel-title">Others playlists</h2>
@@ -255,7 +255,7 @@
               <div class="cards cards-compact" id="othersCards"></div>
             </div>
           </section>
-
+  
           <section class="panel" style="margin-top:16px;">
             <div class="panel-header">
               <h2 class="panel-title">Year Summary Playlist</h2>
@@ -264,24 +264,14 @@
               <div class="cards cards-compact" id="yearSummaryCards"></div>
             </div>
           </section>
-
+  
         </div>
-
+  
         <!-- MIDDLE COLUMN -->
         <section class="panel col col-mid">
           <div class="panel-body col-scroll-body">
             <div class="filter-pills" id="filterPills"></div>
-
-            <!-- sort control -->
-            <div class="sort-control" id="sortControl" aria-hidden="false">
-              <label for="sortSelect" style="color:var(--muted2); font-weight:600; letter-spacing:0.06em;">Sort</label>
-              <select id="sortSelect" class="sort-select" aria-label="Sort playlists and episodes">
-                <option value="name">Name (A → Z)</option>
-                <option value="added">➕ Added (newest)</option>
-                <option value="released">🍃 Released (newest)</option>
-              </select>
-            </div>
-
+  
             <div class="subpanel subpanel-flex" style="margin-top:12px;">
               <div class="subpanel-header">
                 <h2 class="panel-title">Playlists</h2>
@@ -291,14 +281,24 @@
             </div>
           </div>
         </section>
-
+  
         <!-- RIGHT COLUMN -->
         <aside class="panel col col-right">
           <div class="panel-header">
             <h2 class="panel-title">Podcast Episodes</h2>
+  
+            <!-- MOVED: Sort control for podcasts (was previously in middle column) -->
+            <div style="margin-left:auto; display:flex; align-items:center; gap:8px;">
+              <label for="sortSelectRight" style="color:var(--muted2); font-weight:600; letter-spacing:0.06em; margin-right:6px;">Sort</label>
+              <select id="sortSelectRight" class="sort-select" aria-label="Sort podcast episodes">
+                <option value="name">Name (A → Z)</option>
+                <option value="added">➕ Added (newest)</option>
+                <option value="released">🍃 Released (newest)</option>
+              </select>
+            </div>
           </div>
           <div class="panel-body col-scroll-body">
-
+  
             <div class="podcast-head" id="podcastHead" hidden>
               <img class="podcast-thumb" id="podcastThumb" alt="">
               <div style="min-width:0">
@@ -306,17 +306,17 @@
                 <div class="podcast-sub" id="podcastSub"></div>
               </div>
             </div>
-
+  
             <div class="podcast-empty" id="podcastEmpty"></div>
             <div class="podcast-error" id="podcastError" hidden></div>
-
+  
             <!-- ✅ UL is the scroll container -->
             <ul class="podcast-list" id="podcastList"></ul>
           </div>
         </aside>
-
+  
       </div>
-
+  
       <!-- MODAL -->
       <div class="modal-backdrop" id="modalBackdrop" aria-hidden="true">
         <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
@@ -324,7 +324,7 @@
             <h3 class="modal-title" id="modalTitle">Playlist</h3>
             <button class="modal-close" id="modalCloseBtn" type="button">Close</button>
           </div>
-
+  
           <div class="detail-head">
             <img class="detail-thumb" id="detailThumb" alt="">
             <div style="min-width:0">
@@ -332,12 +332,12 @@
               <p class="detail-sub" id="detailSub"></p>
             </div>
           </div>
-
+  
           <ul class="tracklist" id="tracklist"></ul>
         </div>
       </div>
     `;
-
+  
     // hook up modal close
     const backdrop = document.getElementById("modalBackdrop");
     const closeBtn = document.getElementById("modalCloseBtn");
@@ -350,20 +350,39 @@
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape") closeModal();
     });
-
-    // Wire sort select
+  
+    // Wire sort select (podcast)
+    const sortSelectRight = document.getElementById("sortSelectRight");
+    if (sortSelectRight) {
+      // initialize to persisted preference
+      sortSelectRight.value = getSortPref();
+      sortSelectRight.addEventListener("change", (e) => {
+        const v = e.target.value;
+        setSortPref(v);
+        // re-render podcast list with new sort
+        renderPodcastColumn();
+        // keep playlists in sync if you want them to reflect same pref:
+        renderPlaylists();
+        renderOthers();
+        renderYearSummary();
+      });
+    }
+  
+    // Keep backwards compatibility: support any existing sortSelect (if present elsewhere)
     const sortSelect = document.getElementById("sortSelect");
     if (sortSelect) {
       sortSelect.value = getSortPref();
       sortSelect.addEventListener("change", (e) => {
         const v = e.target.value;
         setSortPref(v);
-        // re-render lists with new sort
-        renderPlaylists();
         renderPodcastColumn();
+        renderPlaylists();
+        renderOthers();
+        renderYearSummary();
       });
     }
   }
+
 
   /***********************
    * Cards
