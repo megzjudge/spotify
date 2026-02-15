@@ -354,7 +354,6 @@ main {
 .pill-label { font-weight: 700; }
 .pill-count { color: var(--muted2); font-weight: 700; }
 
-/* Sort control (small) */
 .sort-control {
   display: flex;
   gap: 8px;
@@ -411,7 +410,6 @@ main {
   margin: 0 2px;
   text-decoration: none;
 }
-
 .epnote-link-emoji:hover{
   text-decoration: underline;
 }
@@ -428,7 +426,6 @@ main {
   font-weight: 700;
   transition: background 0.08s ease, transform 0.06s ease;
 }
-
 .pod-sort-arrow:hover {
   background: rgba(255,255,255,0.04);
   transform: translateY(-1px);
@@ -564,7 +561,66 @@ main {
   font-size: 13px;
 }
 
-/* ✅ the UL is the scroll container */
+/* Podcast header controls (right of title) */
+#podcastHead {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between; /* left: thumb+title; right: controls */
+}
+
+/* container for the controls appended to the header */
+#podcastHeadControls {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+/* key label */
+.pod-sort-key {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--muted2);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 8px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 1;
+  font-size: 13px;
+  opacity: 0.85;
+}
+.pod-sort-key[aria-pressed="true"],
+.pod-sort-key:hover {
+  color: var(--spotify-green);
+  opacity: 1;
+  background: rgba(29,185,84,0.04);
+}
+
+/* arrows */
+.pod-sort-arrow {
+  appearance: none;
+  border: 1px solid rgba(255,255,255,0.06);
+  background: rgba(0,0,0,0.06);
+  color: var(--muted2);
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 700;
+  transition: background 0.08s ease, transform 0.06s ease, color 0.06s ease;
+  opacity: 0.7;
+}
+.pod-sort-arrow:hover { transform: translateY(-1px); opacity: 1; }
+.pod-sort-arrow.active { color: var(--spotify-green); border-color: rgba(29,185,84,0.18); background: rgba(29,185,84,0.06); opacity: 1; }
+
+/* =========================
+   UL is the scroll container
+========================= */
+
 #podcastList {
   list-style: none;
   margin: 0;
@@ -671,40 +727,6 @@ main {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.epnote-bubble {
-  appearance: none;
-  border: none;
-  background: transparent;
-  color: rgba(255,255,255,0.92);
-  border-radius: 6px;
-  padding: 0;
-  margin-left: 6px;
-  width: auto;
-  height: auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 15px;
-  line-height: 1;
-  cursor: pointer;
-  transition: opacity 120ms ease, transform 80ms ease;
-  opacity: 0.92;
-}
-
-.epnote-bubble:hover {
-  opacity: 1;
-  transform: translateY(-1px);
-}
-.epnote-link-emoji{
-  display: inline-block;
-  margin: 0 2px;
-  text-decoration: none;
-}
-
-.epnote-link-emoji:hover{
-  text-decoration: underline;
 }
 
 /* =========================
@@ -992,7 +1014,7 @@ main {
   line-height: 1.15;
 }
 
-.detail-sub {
+detail-sub {
   margin: 6px 0 0;
   color: var(--muted);
   font-size: 13.5px;
