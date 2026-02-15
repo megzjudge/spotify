@@ -577,6 +577,83 @@ main {
   justify-content: flex-end;
 }
 
+/* =========================
+   Podcast header — nav + count (ADDED)
+   This block styles the left/right nav, item count, and integrates with existing
+   #podcastHeadControls which the JS already populates for sort controls.
+   ========================= */
+
+/* wrapper that holds navigation arrows, count, and sort controls */
+.pod-head-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: flex-end;
+  min-width: 220px; /* keeps controls from collapsing on wider screens */
+}
+
+/* simple rounded arrow buttons for left / right */
+.pod-nav-button {
+  appearance: none;
+  border: 1px solid rgba(255,255,255,0.06);
+  background: rgba(0,0,0,0.06);
+  color: var(--muted2);
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  cursor: pointer;
+  transition: transform 0.06s ease, background 0.08s ease, color 0.06s ease;
+}
+.pod-nav-button:hover { transform: translateY(-1px); color: var(--spotify-green); background: rgba(29,185,84,0.04); }
+
+/* item-count badge with its own left/right mini controls */
+.pod-count-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.04);
+  background: rgba(0,0,0,0.06);
+  color: var(--muted2);
+  font-weight: 700;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+/* smaller arrow icons used inside the count control (tight spacing) */
+.pod-count-row .mini-arrow {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.04);
+  background: transparent;
+  cursor: pointer;
+  font-weight: 800;
+}
+.pod-count-row .mini-arrow:hover { color: var(--spotify-green); background: rgba(29,185,84,0.04); }
+
+/* make the sort controls (released / added) sit neatly after count */
+#podcastHeadControls {
+  gap: 8px;            /* slightly tighter than the rest */
+  align-items: center;
+}
+
+/* ensure overall header layout remains tidy on small screens */
+@media (max-width: 860px) {
+  .pod-head-right { min-width: 0; gap: 8px; }
+  .pod-nav-button { width: 32px; height: 32px; }
+  .pod-count-row { font-size: 12px; padding: 5px 7px; }
+  .pod-count-row .mini-arrow { width: 26px; height: 26px; }
+}
+
 /* key label */
 .pod-sort-key {
   appearance: none;
