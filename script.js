@@ -1,5 +1,3 @@
-// script.js
-
 (() => {
   /***********************
    * CONFIG
@@ -88,33 +86,27 @@
 
   /***********************
    * Podcast sort preference helpers (persist to localStorage)
-   * Format stored: "field:dir" where field is "added"|"released"|"name" and dir is "asc"|"desc"
+   * Stores an object: { key: "added"|"released"|"name", dir: "desc"|"asc" }
    ***********************/
-  function getPodcastSortPrefRaw() {
+  function getPodcastSortPref() {
     try {
-      const v = localStorage.getItem("podcast_sort") || "added:desc";
-      return String(v || "added:desc");
+      const raw = localStorage.getItem("podcast_sort_pref");
+      if (!raw) return { key: "added", dir: "desc" }; // default newest added first
+      const obj = JSON.parse(raw);
+      if (!obj || typeof obj !== "object") return { key: "added", dir: "desc" };
+      return { key: obj.key || "added", dir: obj.dir === "asc" ? "asc" : "desc" };
     } catch {
-      return "added:desc";
+      return { key: "added", dir: "desc" };
     }
   }
-
-  function getPodcastSortPref() {
-    const raw = getPodcastSortPrefRaw();
-    const [field = "added", dir = "desc"] = raw.split(":");
-    return { field, dir: dir === "asc" ? "asc" : "desc" };
-  }
-
-  function setPodcastSortPrefObj(obj) {
+  function setPodcastSortPref(pref) {
     try {
-      const field = String(obj?.field || "added");
-      const dir = obj?.dir === "asc" ? "asc" : "desc";
-      localStorage.setItem("podcast_sort", `${field}:${dir}`);
+      const safe = {
+        key: (pref && pref.key) ? String(pref.key) : "added",
+        dir: pref && pref.dir === "asc" ? "asc" : "desc"
+      };
+      localStorage.setItem("podcast_sort_pref", JSON.stringify(safe));
     } catch {}
-  }
-
-  function setPodcastSortPref(field, dir) {
-    setPodcastSortPrefObj({ field, dir });
   }
 
   /***********************
@@ -308,32 +300,15 @@
           </div>
           <div class="panel-body col-scroll-body">
 
-            <!-- Podcast-level sort control (podcast-only) -->
-            <div id="podcastSortControls" style="display:flex; align-items:center; gap:12px; margin-bottom:10px; color:var(--muted2); font-size:13px;">
-              <div style="display:flex; align-items:center; gap:8px; white-space:nowrap;">
-                <span style="font-weight:700;">🍃 Released</span>
-                <button class="pod-sort-arrow" data-sort-field="released" data-sort-dir="asc" title="Released ascending">▲</button>
-                <button class="pod-sort-arrow" data-sort-field="released" data-sort-dir="desc" title="Released descending">▼</button>
-              </div>
-
-              <div style="display:flex; align-items:center; gap:10px; color:var(--muted2);">
-                <span style="opacity:0.6;">•</span>
-              </div>
-
-              <div style="display:flex; align-items:center; gap:8px; white-space:nowrap;">
-                <span style="font-weight:700;">➕ Added</span>
-                <button class="pod-sort-arrow" data-sort-field="added" data-sort-dir="asc" title="Added ascending">▲</button>
-                <button class="pod-sort-arrow" data-sort-field="added" data-sort-dir="desc" title="Added descending">▼</button>
-              </div>
-
-              <div style="margin-left:auto; color:var(--muted2); font-size:13px;" id="podcastSortIndicator"></div>
-            </div>
-
             <div class="podcast-head" id="podcastHead" hidden>
               <img class="podcast-thumb" id="podcastThumb" alt="">
               <div style="min-width:0">
-                <div class="podcast-title" id="podcastTitle"></div>
-                <div class="podcast-sub" id="podcastSub"></div>
+                <div style="display:flex; align-items:center; gap:8px;">
+                  <div style="min-width:0">
+                    <div class="podcast-title" id="podcastTitle"></div>
+                    <div class="podcast-sub" id="podcastSub"></div>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -380,20 +355,7 @@
       if (e.key === "Escape") closeModal();
     });
 
-    // Wire sort arrow buttons
-    const arrows = document.querySelectorAll(".pod-sort-arrow");
-    arrows.forEach((btn) => {
-      btn.addEventListener("click", (ev) => {
-        const field = btn.getAttribute("data-sort-field") || "added";
-        const dir = btn.getAttribute("data-sort-dir") === "asc" ? "asc" : "desc";
-        setPodcastSortPref(field, dir);
-        renderPodcastSortIndicator();
-        renderPodcastColumn();
-      });
-    });
-
-    // Ensure the on-load indicator shows current pref
-    requestAnimationFrame(() => renderPodcastSortIndicator());
+    // Podcast header controls initialized in renderPodcastColumn()
   }
 
   /***********************
@@ -1319,7 +1281,7 @@
         offset = nextOffset;
       }
   
-      // Sort same as before by default 'added' behavior if addedAt present
+      // Sort same as before (initial default load sort: added newest first if available)
       const anyAddedAt = allEpisodes.some((x) => !!x?.addedAt);
       if (anyAddedAt) {
         allEpisodes.sort((a, b) => {
@@ -1337,18 +1299,121 @@
     }
   }
 
-  // Helper to render current sort indicator text
-  function renderPodcastSortIndicator() {
-    const el = document.getElementById("podcastSortIndicator");
-    if (!el) return;
-    const { field, dir } = getPodcastSortPref();
-    const label = field === "released" ? "🍃 Released" : (field === "name" ? "A → Z" : "➕ Added");
-    const arrow = dir === "asc" ? "▲" : "▼";
-    el.textContent = `${label} ${arrow}`;
+  // helper comparator with direction and fallback to numeric date parse or string compare
+  function compareByField(aVal, bVal, dir, isDate) {
+    const sign = dir === "asc" ? 1 : -1;
+    if (isDate) {
+      const ta = aVal ? Date.parse(aVal) : 0;
+      const tb = bVal ? Date.parse(bVal) : 0;
+      return sign * (ta - tb);
+    }
+    // numeric fallback
+    if (!isNaN(Number(aVal)) && !isNaN(Number(bVal))) {
+      return sign * (Number(aVal) - Number(bVal));
+    }
+    // string compare
+    return sign * String((aVal || "")).localeCompare(String((bVal || "")), undefined, { sensitivity: 'base' });
+  }
+
+  // Render header controls (title row controls)
+  function renderPodcastHeaderControls() {
+    const head = document.getElementById("podcastHead");
+    if (!head) return;
+
+    // ensure a container exists (we'll create right-side controls)
+    let controls = document.getElementById("podcastHeadControls");
+    if (!controls) {
+      controls = document.createElement("div");
+      controls.id = "podcastHeadControls";
+      controls.style.display = "flex";
+      controls.style.gap = "8px";
+      controls.style.alignItems = "center";
+      controls.style.marginLeft = "8px";
+      // append to the header (the header markup is a grid; we will append into it)
+      head.appendChild(controls);
+    }
+
+    const pref = getPodcastSortPref();
+    const button = (key, label) => {
+      // key = "released" | "added" | "name"
+      const wrapper = document.createElement("div");
+      wrapper.style.display = "inline-flex";
+      wrapper.style.gap = "6px";
+      wrapper.style.alignItems = "center";
+
+      // key label (acts as a quick 'select key' toggle to switch to that key and keep direction)
+      const keyBtn = document.createElement("button");
+      keyBtn.className = "pod-sort-key";
+      keyBtn.type = "button";
+      keyBtn.textContent = label;
+      keyBtn.setAttribute("data-pod-sort-key", key);
+      keyBtn.setAttribute("aria-pressed", String(pref.key === key));
+      if (pref.key === key) keyBtn.style.color = "var(--spotify-green)";
+      wrapper.appendChild(keyBtn);
+
+      // up arrow (asc)
+      const up = document.createElement("button");
+      up.className = "pod-sort-arrow";
+      up.type = "button";
+      up.innerHTML = "▲";
+      up.setAttribute("data-pod-sort-key", key);
+      up.setAttribute("data-pod-sort-dir", "asc");
+      if (pref.key === key && pref.dir === "asc") {
+        up.classList.add("active");
+        up.style.color = "var(--spotify-green)";
+      }
+
+      // down arrow (desc)
+      const down = document.createElement("button");
+      down.className = "pod-sort-arrow";
+      down.type = "button";
+      down.innerHTML = "▼";
+      down.setAttribute("data-pod-sort-key", key);
+      down.setAttribute("data-pod-sort-dir", "desc");
+      if (pref.key === key && pref.dir === "desc") {
+        down.classList.add("active");
+        down.style.color = "var(--spotify-green)";
+      }
+
+      wrapper.appendChild(up);
+      wrapper.appendChild(down);
+
+      return wrapper;
+    };
+
+    // clear then append in desired order: Released • Added • Name
+    controls.innerHTML = "";
+    controls.appendChild(button("released", "🍃 Released"));
+    controls.appendChild(document.createTextNode("•"));
+    controls.appendChild(button("added", "➕ Added"));
+    controls.appendChild(document.createTextNode("•"));
+    controls.appendChild(button("name", "A → Z"));
+
+    // wire click handlers
+    controls.querySelectorAll(".pod-sort-arrow, .pod-sort-key").forEach((el) => {
+      el.addEventListener("click", async (ev) => {
+        const k = el.getAttribute("data-pod-sort-key");
+        const d = el.getAttribute("data-pod-sort-dir");
+
+        if (el.classList.contains("pod-sort-key")) {
+          // if clicking key label: if key already active => flip direction; else set as pref keeping previous dir
+          const current = getPodcastSortPref();
+          const newDir = current.key === k ? (current.dir === "desc" ? "asc" : "desc") : current.dir;
+          setPodcastSortPref({ key: k, dir: newDir });
+        } else {
+          // arrow clicked: explicitly set direction
+          setPodcastSortPref({ key: k, dir: d === "asc" ? "asc" : "desc" });
+        }
+
+        // re-render header (so active classes update) and column
+        renderPodcastHeaderControls();
+        renderPodcastColumn();
+      });
+    });
   }
 
   // ----------------------------
-  // renderPodcastColumn (replaced)
+  // renderPodcastColumn (updated)
   // ----------------------------
   function renderPodcastColumn() {
     const head = document.getElementById("podcastHead");
@@ -1359,6 +1424,9 @@
     const sub = document.getElementById("podcastSub");
     const list = document.getElementById("podcastList");
     if (!head || !empty || !errBox || !thumb || !title || !sub || !list) return;
+
+    // render header controls
+    renderPodcastHeaderControls();
 
     const tried = state.podcast.tried;
     const error = state.podcast.error;
@@ -1399,30 +1467,28 @@
     title.textContent = p.name || "Podcast Episodes";
 
     // Apply podcast-only sort preference (do not mutate original array)
-    const pref = getPodcastSortPref(); // {field,dir}
+    const pref = getPodcastSortPref(); // { key:'added'|'released'|'name', dir:'asc'|'desc' }
     let items = originalItems.slice();
 
-    if (pref.field === "added") {
+    if (pref.key === "added") {
       items.sort((a, b) => {
         const ta = a?.addedAt ? Date.parse(a.addedAt) : 0;
         const tb = b?.addedAt ? Date.parse(b.addedAt) : 0;
-        return pref.dir === "asc" ? ta - tb : tb - ta;
+        return pref.dir === "asc" ? (ta - tb) : (tb - ta);
       });
-    } else if (pref.field === "released") {
+    } else if (pref.key === "released") {
+      // newest release first (use many possible fields)
       items.sort((a, b) => {
-        const ra = a?.releaseDate || a?.release_date || a?.publishedAt || a?.published_at || null;
-        const rb = b?.releaseDate || b?.release_date || b?.publishedAt || b?.published_at || null;
-        const ta = ra ? Date.parse(ra) : 0;
-        const tb = rb ? Date.parse(rb) : 0;
-        return pref.dir === "asc" ? ta - tb : tb - ta;
+        const ra = a?.releaseDate || a?.release_date || a?.publishedAt || a?.published_at || a?.published || null;
+        const rb = b?.releaseDate || b?.release_date || b?.publishedAt || b?.published_at || b?.published || null;
+        return compareByField(ra, rb, pref.dir, true);
       });
-    } else if (pref.field === "name") {
+    } else if (pref.key === "name") {
       items.sort((a,b) => {
-        const cmp = String((a?.name||"")).localeCompare(String((b?.name||"")), undefined, { sensitivity: 'base' });
-        return pref.dir === "asc" ? cmp : -cmp;
+        const res = String((a?.name||"")).localeCompare(String((b?.name||"")), undefined, { sensitivity: 'base' });
+        return pref.dir === "asc" ? res : -res;
       });
     } else {
-      // default fallback: keep server order
       items = originalItems.slice();
     }
 
@@ -1433,7 +1499,6 @@
     list.innerHTML = items.map((it) => renderPodcastItem(it)).join("");
     wirePodcastInteractions(list);
     wirePodcastThumbFallbacks(list);
-    renderPodcastSortIndicator();
   }
 
   // ----------------------------
@@ -1451,7 +1516,6 @@
     const addedAtRaw = it.addedAt || it.added_at || it.added || null;
     const releaseRaw = it.releaseDate || it.release_date || it.publishedAt || it.published_at || null;
 
-    // Hover titles show the raw date string; we hide full date as text but expose via hover.
     const addedEmoji = addedAtRaw ? `<span class="pod-meta-emoji" title="Added to playlist: ${escapeHtml(String(addedAtRaw))}">➕</span>` : "";
     const releaseEmoji = releaseRaw ? `<span class="pod-meta-emoji" title="Release date: ${escapeHtml(String(releaseRaw))}">🍃</span>` : "";
 
@@ -1986,9 +2050,11 @@
     blankUntilClick();
     if (refreshButton) refreshButton.addEventListener("click", refreshFromSpotify);
 
-    // If the page already built shell, ensure podcast sort indicator reflects stored preference
+    // If the page already built shell, ensure podcast sort select reflects stored preference
+    // (we removed the top-right select; ensure renderPodcastColumn picks up pref on build)
     try {
-      renderPodcastSortIndicator();
+      // call renderPodcastColumn if podcast was previously loaded
+      renderPodcastColumn();
     } catch {}
   });
 })();
