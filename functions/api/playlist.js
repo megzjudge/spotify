@@ -61,6 +61,25 @@ export async function onRequestPost({ env, request }) {
       });
     }
 
+    // ✅ ENRICH: add release_date (publish date) for episodes
+    // Many playlist item objects don't include the episode's release_date. Fetch episodes in batches and merge.
+    const missingReleaseEpIds = normalizedItems
+      .filter((x) => x.type === "episode" && !x.releaseDate && !x.release_date && x.id)
+      .map((x) => x.id);
+
+    if (missingReleaseEpIds.length) {
+      const eps = await fetchEpisodesByIds(token, missingReleaseEpIds);
+      const idToRelease = new Map((eps || []).map((ep) => [ep?.id, ep?.release_date || null]));
+
+      normalizedItems = normalizedItems.map((x) => {
+        if (x.type !== "episode" || !x.id) return x;
+        const rel = idToRelease.get(x.id) || null;
+        if (!rel) return x;
+        // set both camelCase and snake_case to make frontend robust
+        return { ...x, releaseDate: rel, release_date: rel };
+      });
+    }
+
     return json(
       {
         playlist,
