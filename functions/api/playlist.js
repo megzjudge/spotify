@@ -1,4 +1,5 @@
 // functions/api/playlist.js
+
 export async function onRequestOptions() {
   return new Response(null, {
     status: 204,
@@ -11,7 +12,12 @@ export async function onRequestPost({ env, request }) {
     const body = await request.json().catch(() => ({}));
     const playlistId = String(body.playlistId || "").trim();
 
+    // limit here means "how many normalized items to return" (bounded)
+    // We'll page Spotify (max 100 per request) until we hit this.
     const limit = clampInt(body.limit, 0, 500, 200);
+
+    // NEW: offset support (for worker pagination)
+    // offset is the starting Spotify offset for playlist tracks endpoint.
     const offset = clampInt(body.offset, 0, 1000000, 0);
 
     if (!playlistId) {
@@ -20,12 +26,15 @@ export async function onRequestPost({ env, request }) {
 
     const token = await getUserAccessToken(env);
 
+    // Fetch /me (to label owners)
     const me = await fetchMe(token);
     const myUserId = me?.id || null;
 
+    // Fetch playlist meta
     const pl = await fetchPlaylist(token, playlistId);
     const playlist = normalizePlaylist(pl, myUserId);
 
+    // Items
     const { items, nextOffset, hasMore } =
       limit === 0
         ? { items: [], nextOffset: null, hasMore: false }
@@ -33,6 +42,7 @@ export async function onRequestPost({ env, request }) {
 
     let normalizedItems = items.map(normalizeItem).filter(Boolean);
 
+    // ✅ ENRICH: playlist-items often omit episode artwork.
     const missingEpIds = normalizedItems
       .filter((x) => x.type === "episode" && !x.image && x.id)
       .map((x) => x.id);
@@ -55,31 +65,23 @@ export async function onRequestPost({ env, request }) {
       {
         playlist,
         items: normalizedItems,
+
+        // NEW: worker-friendly paging hints
         nextOffset,
         hasMore
       },
       200
     );
   } catch (err) {
-    // If the error object has a status (we set it below on some throws), use it.
-    const status = err?.status && Number.isFinite(Number(err.status)) ? Number(err.status) : 500;
-
-    // Log full error server-side (safe to remove in prod)
-    console.error("playlist function error:", {
-      message: String(err?.message || err),
-      status: err?.status || null,
-      details: err?.details || null,
-      stack: String(err?.stack || "")
-    });
-
     return json(
       {
         error: "Playlist fetch failed",
         message: String(err?.message || err),
         status: err?.status || null,
-        details: err?.details || null
+        details: err?.details || null,
+        stack: String(err?.stack || "")
       },
-      status
+      500
     );
   }
 }
@@ -92,51 +94,16 @@ async function getUserAccessToken(env) {
   const clientSecret = env.SPOTIFY_KEY;
   const refreshToken = env.SPOTIFY_REFRESH_TOKEN;
 
-  // Helpful log to confirm presence of env (do NOT log raw secrets in prod)
   if (!clientId || !clientSecret || !refreshToken) {
-    console.error("spotify env incomplete:", {
-      hasClientId: !!clientId,
-      hasClientSecret: !!clientSecret,
-      hasRefreshToken: !!refreshToken
-    });
-    const e = new Error(
+    throw new Error(
       "Missing Spotify OAuth secrets (SPOTIFY_PROFILE, SPOTIFY_KEY, SPOTIFY_REFRESH_TOKEN)."
     );
-    e.status = 500;
-    e.details = { missing: {
-      SPOTIFY_PROFILE: !clientId,
-      SPOTIFY_KEY: !clientSecret,
-      SPOTIFY_REFRESH_TOKEN: !refreshToken
-    }};
-    throw e;
-  }
-
-  // Build Basic auth robustly (btoa or Buffer fallback)
-  let basicAuth;
-  try {
-    if (typeof btoa === "function") {
-      basicAuth = btoa(`${clientId}:${clientSecret}`);
-    } else if (typeof Buffer !== "undefined") {
-      basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
-    } else if (typeof globalThis?.TextEncoder === "function") {
-      // last-resort fallback (shouldn't be needed)
-      const utf8 = new TextEncoder().encode(`${clientId}:${clientSecret}`);
-      basicAuth = Array.from(utf8).map((b) => String.fromCharCode(b)).join("");
-      basicAuth = btoa(basicAuth);
-    } else {
-      basicAuth = btoa(`${clientId}:${clientSecret}`);
-    }
-  } catch (err) {
-    const e = new Error("Failed to build Basic auth for Spotify token request.");
-    e.status = 500;
-    e.details = { cause: String(err?.message || err) };
-    throw e;
   }
 
   const res = await fetch("https://accounts.spotify.com/api/token", {
     method: "POST",
     headers: {
-      Authorization: "Basic " + basicAuth,
+      Authorization: "Basic " + btoa(`${clientId}:${clientSecret}`),
       "Content-Type": "application/x-www-form-urlencoded"
     },
     body: new URLSearchParams({
@@ -185,14 +152,11 @@ async function fetchJsonOrThrow(url, token, label) {
   return data;
 }
 
-/* rest of file unchanged... (fetchMe, fetchPlaylist, fetchPlaylistItemsBounded,
-   fetchEpisodesByIds, normalization helpers, json(), corsHeaders(), clampInt()) */
-
-function fetchMe(token) {
+async function fetchMe(token) {
   return fetchJsonOrThrow("https://api.spotify.com/v1/me", token, "/me");
 }
 
-function fetchPlaylist(token, playlistId) {
+async function fetchPlaylist(token, playlistId) {
   return fetchJsonOrThrow(
     `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}`,
     token,
@@ -200,7 +164,78 @@ function fetchPlaylist(token, playlistId) {
   );
 }
 
-/* ...keep your existing implementations for the remainder of file ... */
+/**
+ * Fetch up to maxItems starting at startOffset.
+ * Returns raw playlist track objects as Spotify returns them.
+ *
+ * Also returns nextOffset/hasMore to support client-side paging.
+ */
+async function fetchPlaylistItemsBounded(token, playlistId, maxItems, startOffset) {
+  let items = [];
+  let offset = startOffset;
+
+  // Spotify supports limit up to 100 per call for playlist tracks.
+  // We'll request min(100, remaining) until:
+  // - no next page
+  // - we reached maxItems
+  // - Spotify returns fewer than requested (end)
+  let hasMore = true;
+  let nextOffset = null;
+
+  while (hasMore && items.length < maxItems) {
+    const remaining = maxItems - items.length;
+    const pageLimit = Math.min(100, remaining);
+
+    const url =
+      `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}/tracks` +
+      `?limit=${pageLimit}&offset=${offset}`;
+
+    const data = await fetchJsonOrThrow(url, token, "playlist items");
+
+    const pageItems = Array.isArray(data.items) ? data.items : [];
+    items = items.concat(pageItems);
+
+    // Spotify gives next as a URL or null
+    if (data.next) {
+      offset += pageItems.length || pageLimit;
+      hasMore = true;
+      nextOffset = offset;
+    } else {
+      hasMore = false;
+      nextOffset = null;
+    }
+
+    // If Spotify gave us fewer than requested, stop
+    if (pageItems.length < pageLimit) {
+      hasMore = false;
+      nextOffset = null;
+    }
+  }
+
+  return { items, nextOffset, hasMore };
+}
+
+// ✅ Episode enrichment lookup (50 ids per request)
+async function fetchEpisodesByIds(token, ids) {
+  const clean = (ids || [])
+    .map((x) => String(x || "").trim())
+    .filter(Boolean);
+
+  if (!clean.length) return [];
+
+  const out = [];
+  for (let i = 0; i < clean.length; i += 50) {
+    const chunk = clean.slice(i, i + 50);
+    const url = `https://api.spotify.com/v1/episodes?ids=${encodeURIComponent(chunk.join(","))}`;
+    const data = await fetchJsonOrThrow(url, token, "episodes lookup");
+    out.push(...(data.episodes || []));
+  }
+  return out;
+}
+
+/* =========================
+   NORMALIZATION
+========================= */
 
 function pickFirstImageUrl(images) {
   if (!Array.isArray(images) || !images.length) return null;
@@ -223,11 +258,12 @@ function normalizePlaylist(p, myUserId) {
   };
 }
 
+// playlist items return { added_at, track: {...} } even for episodes (track.type === "episode")
 function normalizeItem(it) {
   const obj = it?.track;
   if (!obj) return null;
 
-  const type = obj.type;
+  const type = obj.type; // "track" | "episode"
   const url = obj.external_urls?.spotify || null;
   const durationMs = Number(obj.duration_ms) || 0;
 
@@ -265,6 +301,9 @@ function normalizeItem(it) {
   return null;
 }
 
+/* =========================
+   RESPONSE HELPERS
+========================= */
 function json(obj, status = 200) {
   return new Response(JSON.stringify(obj, null, 2), {
     status,
