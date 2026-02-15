@@ -51,7 +51,7 @@
     filter: "all",
     others: [],
     yearSummary: [],
-    podcast: { tried: false, error: null, playlist: null, items: [] },
+    podcast: { tried: false, error: null, playlist: null, items: [], sortBy: "added" },
 
     // ✅ song-hours compute (client-side worker)
     songHours: {
@@ -280,7 +280,10 @@
             <div class="podcast-head" id="podcastHead" hidden>
               <img class="podcast-thumb" id="podcastThumb" alt="">
               <div style="min-width:0">
-                <div class="podcast-title" id="podcastTitle"></div>
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <div class="podcast-title" id="podcastTitle"></div>
+                  <div id="podcastSortControls" aria-hidden="false"></div>
+                </div>
                 <div class="podcast-sub" id="podcastSub"></div>
               </div>
             </div>
@@ -1094,6 +1097,80 @@
     return { nextOffset, hasMore };
   }
 
+  // ---------- Podcast sorting helpers ----------
+  function renderPodcastSortButtons() {
+    const container = document.getElementById("podcastSortControls");
+    if (!container) return;
+
+    const addedActive = state.podcast.sortBy === "added" ? "active" : "";
+    const releaseActive = state.podcast.sortBy === "release" ? "active" : "";
+
+    container.innerHTML = `
+      <div class="sort-btns" role="toolbar" aria-label="Sort episodes">
+        <button type="button" class="sort-btn ${addedActive}" data-podcast-sort="added" title="Sort by added date">Added</button>
+        <button type="button" class="sort-btn ${releaseActive}" data-podcast-sort="release" title="Sort by release date">Release</button>
+      </div>
+    `;
+
+    container.querySelectorAll("button[data-podcast-sort]").forEach((b) => {
+      if (b.__podSortBound) return;
+      b.__podSortBound = true;
+      b.addEventListener("click", (e) => {
+        const v = b.getAttribute("data-podcast-sort");
+        setPodcastSort(v);
+      }, { passive: true });
+    });
+  }
+
+  function setPodcastSort(next) {
+    if (!next || (next !== "added" && next !== "release")) return;
+    if (state.podcast.sortBy === next) return;
+    state.podcast.sortBy = next;
+    renderPodcastSortButtons();
+    renderPodcastColumn();
+  }
+
+  // robust date extractor: prefers ISO-like fields (releaseDate, published_at, publishDate, release_date) then falls back to addedAt
+  function extractEpisodeDateForSort(it, preferRelease = false) {
+    const tryParse = (v) => {
+      if (!v) return NaN;
+      // Some APIs return yyyy-mm-dd (no time) which Date.parse handles as UTC in many browsers.
+      const n = Date.parse(String(v));
+      return Number.isFinite(n) ? n : NaN;
+    };
+
+    const releaseCandidates = [
+      it?.releaseDate,
+      it?.release_date,
+      it?.publishedAt,
+      it?.published_at,
+      it?.publishDate,
+      it?.publish_date,
+      it?.release,
+      it?.firstReleased,
+      it?.first_release_date
+    ];
+
+    const addedCand = it?.addedAt || it?.added_at || it?.added;
+
+    if (preferRelease) {
+      for (const c of releaseCandidates) {
+        const p = tryParse(c);
+        if (Number.isFinite(p)) return p;
+      }
+      const pa = tryParse(addedCand);
+      return Number.isFinite(pa) ? pa : 0;
+    } else {
+      const pAdded = tryParse(addedCand);
+      if (Number.isFinite(pAdded)) return pAdded;
+      for (const c of releaseCandidates) {
+        const p = tryParse(c);
+        if (Number.isFinite(p)) return p;
+      }
+      return 0;
+    }
+  }
+
   // ✅ NEW: fetch the podcast playlist in pages (offset pagination)
   async function fetchPodcastEpisodesPaged(playlistId, { limit = 200, maxItems = 5000 } = {}) {
     let playlistMeta = null;
@@ -1182,46 +1259,46 @@
     state.podcast.error = null;
     state.podcast.playlist = null;
     state.podcast.items = [];
-  
+
     const playlistId = PODCAST_PLAYLIST_ID;
-  
+
     // page size (Spotify allows up to 100 for many endpoints; your API seems to support 200)
     const limit = 200;
-  
+
     try {
       const allEpisodes = [];
       const seen = new Set();
-  
+
       let offset = 0;
       let safety = 0;
-  
+
       while (true) {
         safety++;
         if (safety > 25) break; // hard safety cap
-  
+
         const res = await fetch(API_PLAYLIST, {
           method: "POST",
           headers: { "Content-Type": "application/json", Accept: "application/json" },
           body: JSON.stringify({ playlistId, limit, offset })
         });
-  
+
         const text = await res.text();
         let data = null;
         try { data = text ? JSON.parse(text) : null; } catch {}
-  
+
         if (!res.ok || !data) {
           const msg = (data && (data.message || data.error)) || text || `HTTP ${res.status}`;
           console.error("Podcast /api/playlist error payload:", { status: res.status, data, text });
           state.podcast.error = msg;
           return;
         }
-  
+
         // keep playlist meta from the first page
         if (!state.podcast.playlist) state.podcast.playlist = data.playlist || null;
-  
+
         const items = Array.isArray(data.items) ? data.items : [];
         const episodes = items.filter((x) => (x?.type || "") === "episode");
-  
+
         for (const ep of episodes) {
           const id = String(ep?.id || "").trim();
           if (!id) continue;
@@ -1229,30 +1306,30 @@
           seen.add(id);
           allEpisodes.push(ep);
         }
-  
+
         const hasMore =
           (typeof data.hasMore === "boolean" ? data.hasMore : null) ??
           (typeof data.more === "boolean" ? data.more : null) ??
           false;
-  
+
         const nextOffsetRaw =
           (Number.isFinite(Number(data.nextOffset)) ? Number(data.nextOffset) : null) ??
           (Number.isFinite(Number(data.nextPageOffset)) ? Number(data.nextPageOffset) : null) ??
           null;
-  
+
         // ✅ IMPORTANT: if hasMore is false, stop regardless of nextOffset weirdness
         if (!hasMore) break;
-  
+
         // if API provides a sane nextOffset use it; otherwise increment by limit
         const nextOffset = (nextOffsetRaw !== null && nextOffsetRaw !== offset) ? nextOffsetRaw : (offset + limit);
-  
+
         // guard against looping
         if (nextOffset === offset) break;
-  
+
         offset = nextOffset;
       }
-  
-      // Sort same as before
+
+      // Sort same as before (initial client sorting by addedAt fallback)
       const anyAddedAt = allEpisodes.some((x) => !!x?.addedAt);
       if (anyAddedAt) {
         allEpisodes.sort((a, b) => {
@@ -1263,7 +1340,7 @@
       } else {
         allEpisodes.reverse();
       }
-  
+
       state.podcast.items = allEpisodes;
     } catch (e) {
       state.podcast.error = String(e?.message || e);
@@ -1318,7 +1395,19 @@
     title.textContent = p.name || "Podcast Episodes";
     sub.textContent = `${items.length} items`;
 
-    list.innerHTML = items.map(renderPodcastItem).join("");
+    // Render sort controls
+    renderPodcastSortButtons();
+
+    // Sort items before rendering based on state.podcast.sortBy
+    const sortBy = String(state.podcast.sortBy || "added");
+    const sortedItems = (Array.isArray(items) ? items.slice() : []).sort((a, b) => {
+      // descending order (newest first)
+      const ta = extractEpisodeDateForSort(a, sortBy === "release") || 0;
+      const tb = extractEpisodeDateForSort(b, sortBy === "release") || 0;
+      return tb - ta;
+    });
+
+    list.innerHTML = sortedItems.map(renderPodcastItem).join("");
     wirePodcastInteractions(list);
     wirePodcastThumbFallbacks(list);
   }
