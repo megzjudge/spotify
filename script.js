@@ -504,45 +504,33 @@
 
   function ensureSongHoursWorker() {
     if (state.songHours.worker) return state.songHours.worker;
-
+  
     const WORKER_SOURCE = `
-      const API_PLAYLIST = "/api/playlist";
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-      function safeJsonParse(text) {
-        try { return text ? JSON.parse(text) : null; } catch { return null; }
-      }
-
-      async function fetchPlaylistPage({ playlistId, limit, offset }) {
-        const res = await fetch(API_PLAYLIST, {
+      function safeJsonParse(text) { try { return text ? JSON.parse(text) : null; } catch { return null; }
+  
+      async function fetchPlaylistPage({ apiPlaylistUrl, playlistId, limit, offset }) {
+        const res = await fetch(apiPlaylistUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json", Accept: "application/json" },
           body: JSON.stringify({ playlistId, limit, offset })
         });
-
         const text = await res.text();
         const data = safeJsonParse(text);
-
         if (!res.ok || !data) {
           const msg = (data && (data.message || data.error)) || text || ("HTTP " + res.status);
           throw new Error("Playlist " + playlistId + " failed: " + msg);
         }
-
         const items = Array.isArray(data.items) ? data.items : [];
-
-        const nextOffset =
-          (Number.isFinite(Number(data.nextOffset)) ? Number(data.nextOffset) : null) ??
-          (Number.isFinite(Number(data.nextPageOffset)) ? Number(data.nextPageOffset) : null) ??
-          null;
-
-        const hasMore =
-          (typeof data.hasMore === "boolean" ? data.hasMore : null) ??
-          (typeof data.more === "boolean" ? data.more : null) ??
-          null;
-
+        const nextOffset = (Number.isFinite(Number(data?.nextOffset)) ? Number(data.nextOffset) : null) ??
+                           (Number.isFinite(Number(data?.nextPageOffset)) ? Number(data.nextPageOffset) : null) ??
+                           null;
+        const hasMore = (typeof data?.hasMore === "boolean" ? data.hasMore : null) ??
+                        (typeof data?.more === "boolean" ? data.more : null) ??
+                        null;
         return { items, nextOffset, hasMore };
       }
-
+  
       function sumTrackMs(items) {
         let ms = 0;
         for (const it of items) {
@@ -551,63 +539,58 @@
         }
         return ms;
       }
-
-      async function fetchPlaylistDurationMs(playlistId, { limit = 200 } = {}) {
+  
+      async function fetchPlaylistDurationMs(apiPlaylistUrl, playlistId, { limit = 200 } = {}) {
         let totalMs = 0;
         let offset = 0;
         let safetyPages = 0;
-
+  
         while (true) {
           safetyPages++;
           if (safetyPages > 200) break;
-
-          const { items, nextOffset, hasMore } = await fetchPlaylistPage({
-            playlistId,
-            limit,
-            offset
-          });
-
+  
+          const { items, nextOffset, hasMore } = await fetchPlaylistPage({ apiPlaylistUrl, playlistId, limit, offset });
+  
           totalMs += sumTrackMs(items);
-
+  
           const gotFullPage = items.length >= limit;
-
+  
           if (hasMore === true) {
             offset = (nextOffset !== null) ? nextOffset : (offset + limit);
             continue;
           }
-
+  
           if (nextOffset !== null && nextOffset !== offset) {
             offset = nextOffset;
             continue;
           }
-
+  
           if (gotFullPage) {
             offset += limit;
             continue;
           }
-
+  
           break;
         }
-
+  
         return totalMs;
       }
-
+  
       self.onmessage = async (e) => {
         const msg = e.data || {};
         const playlistIds = Array.isArray(msg.playlistIds) ? msg.playlistIds : [];
+        const apiPlaylistUrl = String(msg.apiPlaylistUrl || "").trim();
         const throttleMs = Number(msg.throttleMs);
         const throttle = Number.isFinite(throttleMs) ? Math.max(0, throttleMs) : 120;
-
         const limitIn = Number(msg.limit);
         const limit = Number.isFinite(limitIn) ? Math.min(400, Math.max(50, Math.floor(limitIn))) : 200;
-
+  
         try {
           let totalMs = 0;
-
           for (let i = 0; i < playlistIds.length; i++) {
             const id = String(playlistIds[i] || "").trim();
             if (!id) continue;
-
+  
             self.postMessage({
               type: "progress",
               done: i,
@@ -615,45 +598,45 @@
               playlistId: id,
               msSoFar: totalMs
             });
-
+  
             try {
-              totalMs += await fetchPlaylistDurationMs(id, { limit });
+              totalMs += await fetchPlaylistDurationMs(apiPlaylistUrl, id, { limit });
             } catch (err) {
               await sleep(500);
-              totalMs += await fetchPlaylistDurationMs(id, { limit });
+              totalMs += await fetchPlaylistDurationMs(apiPlaylistUrl, id, { limit });
             }
-
+  
             if (throttle) await sleep(throttle);
           }
-
+  
           self.postMessage({ type: "done", totalMs });
         } catch (err) {
           self.postMessage({ type: "error", message: String(err?.message || err) });
         }
       };
     `;
-
+  
     try {
       const blob = new Blob([WORKER_SOURCE], { type: "text/javascript" });
       const url = URL.createObjectURL(blob);
       const w = new Worker(url);
       URL.revokeObjectURL(url);
-
+  
       w.onmessage = (e) => {
         const msg = e.data || {};
         if (!state.snapshot?.totals) return;
-
+  
         if (msg.type === "progress") {
           state.songHours.running = true;
           state.songHours.done = Number(msg.done) || 0;
           state.songHours.total = Number(msg.total) || 0;
           state.songHours.msSoFar = Number(msg.msSoFar) || 0;
-
+  
           state.snapshot.totals.songHoursStatus = "computing";
           renderStatistics();
           return;
         }
-
+  
         if (msg.type === "done") {
           const totalMs = Number(msg.totalMs);
           if (Number.isFinite(totalMs) && totalMs > 0) {
@@ -664,12 +647,12 @@
           } else {
             state.snapshot.totals.songHoursStatus = "approx";
           }
-
+  
           state.songHours.running = false;
           renderStatistics();
           return;
         }
-
+  
         if (msg.type === "error") {
           state.songHours.running = false;
           state.songHours.lastError = String(msg.message || "Unknown worker error");
@@ -678,7 +661,7 @@
           renderStatistics();
         }
       };
-
+  
       w.onerror = (err) => {
         state.songHours.running = false;
         state.songHours.lastError = String(err?.message || err);
@@ -686,7 +669,7 @@
         console.warn("song-hours worker fatal error:", err);
         renderStatistics();
       };
-
+  
       state.songHours.worker = w;
       return w;
     } catch (e) {
@@ -733,6 +716,7 @@
     state.songHours.lastError = null;
 
     w.postMessage({
+      apiPlaylistUrl: (typeof location !== 'undefined' ? (location.origin + API_PLAYLIST) : API_PLAYLIST),
       playlistIds,
       throttleMs: 120,
       limit: 200
