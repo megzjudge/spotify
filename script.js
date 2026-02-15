@@ -502,13 +502,16 @@
     state.songHours.lastError = null;
   }
 
+  // Robust worker creation: build worker from a function -> toString -> Blob.
+  // This avoids big backtick template issues and reduces SyntaxError risks.
   function ensureSongHoursWorker() {
     if (state.songHours.worker) return state.songHours.worker;
-  
-    const WORKER_SOURCE = `
+
+    // Worker function: keep this as a plain JS function (no external template quoting)
+    function songHoursWorkerMain() {
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-      function safeJsonParse(text) { try { return text ? JSON.parse(text) : null; } catch { return null; }
-  
+      function safeJsonParse(text) { try { return text ? JSON.parse(text) : null; } catch { return null; } }
+
       async function fetchPlaylistPage({ apiPlaylistUrl, playlistId, limit, offset }) {
         const res = await fetch(apiPlaylistUrl, {
           method: "POST",
@@ -530,7 +533,7 @@
                         null;
         return { items, nextOffset, hasMore };
       }
-  
+
       function sumTrackMs(items) {
         let ms = 0;
         for (const it of items) {
@@ -539,43 +542,43 @@
         }
         return ms;
       }
-  
+
       async function fetchPlaylistDurationMs(apiPlaylistUrl, playlistId, { limit = 200 } = {}) {
         let totalMs = 0;
         let offset = 0;
         let safetyPages = 0;
-  
+
         while (true) {
           safetyPages++;
           if (safetyPages > 200) break;
-  
+
           const { items, nextOffset, hasMore } = await fetchPlaylistPage({ apiPlaylistUrl, playlistId, limit, offset });
-  
+
           totalMs += sumTrackMs(items);
-  
+
           const gotFullPage = items.length >= limit;
-  
+
           if (hasMore === true) {
             offset = (nextOffset !== null) ? nextOffset : (offset + limit);
             continue;
           }
-  
+
           if (nextOffset !== null && nextOffset !== offset) {
             offset = nextOffset;
             continue;
           }
-  
+
           if (gotFullPage) {
             offset += limit;
             continue;
           }
-  
+
           break;
         }
-  
+
         return totalMs;
       }
-  
+
       self.onmessage = async (e) => {
         const msg = e.data || {};
         const playlistIds = Array.isArray(msg.playlistIds) ? msg.playlistIds : [];
@@ -584,13 +587,13 @@
         const throttle = Number.isFinite(throttleMs) ? Math.max(0, throttleMs) : 120;
         const limitIn = Number(msg.limit);
         const limit = Number.isFinite(limitIn) ? Math.min(400, Math.max(50, Math.floor(limitIn))) : 200;
-  
+
         try {
           let totalMs = 0;
           for (let i = 0; i < playlistIds.length; i++) {
             const id = String(playlistIds[i] || "").trim();
             if (!id) continue;
-  
+
             self.postMessage({
               type: "progress",
               done: i,
@@ -598,45 +601,55 @@
               playlistId: id,
               msSoFar: totalMs
             });
-  
+
             try {
               totalMs += await fetchPlaylistDurationMs(apiPlaylistUrl, id, { limit });
             } catch (err) {
               await sleep(500);
               totalMs += await fetchPlaylistDurationMs(apiPlaylistUrl, id, { limit });
             }
-  
+
             if (throttle) await sleep(throttle);
           }
-  
+
           self.postMessage({ type: "done", totalMs });
         } catch (err) {
           self.postMessage({ type: "error", message: String(err?.message || err) });
         }
       };
-    `;
-  
+    } // end worker function
+
     try {
-      const blob = new Blob([WORKER_SOURCE], { type: "text/javascript" });
+      // Convert function -> string and immediately wrap in an IIFE so worker runs as top-level script
+      const fnSrc = '(' + songHoursWorkerMain.toString() + ')()';
+      // DEBUG: log length so you can see if truncation happened
+      console.log('[song-hours worker] generating blob, length:', fnSrc.length);
+
+      const blob = new Blob([fnSrc], { type: 'text/javascript' });
       const url = URL.createObjectURL(blob);
       const w = new Worker(url);
-      URL.revokeObjectURL(url);
-  
+
+      // revoke the url after a tick to be safe (worker has its own copy)
+      setTimeout(() => {
+        try { URL.revokeObjectURL(url); } catch (e) {}
+      }, 2000);
+
+      // wire messages/errors exactly as before
       w.onmessage = (e) => {
         const msg = e.data || {};
         if (!state.snapshot?.totals) return;
-  
+
         if (msg.type === "progress") {
           state.songHours.running = true;
           state.songHours.done = Number(msg.done) || 0;
           state.songHours.total = Number(msg.total) || 0;
           state.songHours.msSoFar = Number(msg.msSoFar) || 0;
-  
+
           state.snapshot.totals.songHoursStatus = "computing";
           renderStatistics();
           return;
         }
-  
+
         if (msg.type === "done") {
           const totalMs = Number(msg.totalMs);
           if (Number.isFinite(totalMs) && totalMs > 0) {
@@ -647,12 +660,12 @@
           } else {
             state.snapshot.totals.songHoursStatus = "approx";
           }
-  
+
           state.songHours.running = false;
           renderStatistics();
           return;
         }
-  
+
         if (msg.type === "error") {
           state.songHours.running = false;
           state.songHours.lastError = String(msg.message || "Unknown worker error");
@@ -661,7 +674,7 @@
           renderStatistics();
         }
       };
-  
+
       w.onerror = (err) => {
         state.songHours.running = false;
         state.songHours.lastError = String(err?.message || err);
@@ -669,7 +682,7 @@
         console.warn("song-hours worker fatal error:", err);
         renderStatistics();
       };
-  
+
       state.songHours.worker = w;
       return w;
     } catch (e) {
