@@ -378,64 +378,60 @@ main {
    Small additions for podcast meta emojis & spacing
 ========================= */
 
-.pod-sort-dir {
-  appearance: none;
-  border: none;
-  background: transparent;
-  color: var(--muted2);
-  font-weight: 700;
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: 6px;
-  margin-left: 4px;
-  line-height: 1;
-  opacity: 0.65;
-  transition: background-color 120ms ease, color 120ms ease, opacity 120ms ease;
-}
+.pod-meta-emoji { display:inline-block; margin-right:6px; line-height:1; cursor:default; }
+.pod-meta-emojis { vertical-align:middle; }
 
-.pod-sort-dir.active {
-  color: var(--spotify-green);
-  text-decoration: underline;
-  opacity: 1;
-  background: rgba(29,185,84,0.06);
-}
-
-.pod-sort-key {
+/* Reduce the visual weight of the notes bubble so it's less noisy */
+.epnote-bubble {
   appearance: none;
-  border: none;
-  background: transparent;
-  color: var(--muted2);
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: 6px;
-  font-weight: 700;
+  border: 1px solid rgba(255,255,255,0.06); /* softer */
+  background: rgba(0,0,0,0.10);              /* lighter */
+  color: rgba(255,255,255,0.92);
+  border-radius: 10px;                       /* smaller pill */
+  width: 28px;
+  height: 28px;
+  font-size: 14px;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  line-height: 1;
-}
-.pod-sort-key[aria-pressed="true"] { color: var(--spotify-green); }
-
-.pod-meta-emoji {
-  display: inline-block;
-  margin-right: 8px;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.08s ease-out, border-color 0.12s ease-out, background 0.12s ease-out, opacity 0.12s ease-out;
   padding: 0;
-  line-height: 1;
-  vertical-align: middle;
-  cursor: default;
 }
 
-.pod-meta-emojis {
-  vertical-align: middle;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+.epnote-bubble:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255,255,255,0.12);
+  background: rgba(0,0,0,0.16);
 }
 
-.podcast-item-sub .epnote-bubble {
-  margin-left: 8px;
-  transform: none;
-  box-shadow: none;
+/* tweak emoji link appearance */
+.epnote-link-emoji{
+  display: inline-block;
+  margin: 0 2px;
+  text-decoration: none;
+}
+
+.epnote-link-emoji:hover{
+  text-decoration: underline;
+}
+
+/* new small sort arrow buttons in podcast header */
+.pod-sort-arrow {
+  appearance: none;
+  border: 1px solid rgba(255,255,255,0.06);
+  background: rgba(0,0,0,0.06);
+  color: var(--muted2);
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 700;
+  transition: background 0.08s ease, transform 0.06s ease;
+}
+
+.pod-sort-arrow:hover {
+  background: rgba(255,255,255,0.04);
+  transform: translateY(-1px);
 }
 
 /* =========================
