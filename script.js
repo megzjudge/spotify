@@ -37,10 +37,6 @@
   // ✅ Notes auth (client-side) — stored per-session only.
   const SS_NOTES_AUTH_KEY = "spotify_notes_auth";
 
-  // Sort persistence
-  const STORAGE_SORT_KEY = "spotify_ui_sort";
-  const DEFAULT_SORT = "name"; // name | added | released
-
   /***********************
    * DOM
    ***********************/
@@ -69,12 +65,37 @@
 
     // Episode notes
     episodeNotes: {
+      // episodeId -> {
+      //   savedNotes:[{timestamp,text}],
+      //   draftNotes:[{timestamp,text}],
+      //   loadedSaved:boolean,
+      //   saving:boolean,
+      //   savedAt:number|null,
+      //   error:string|null
+      // }
       cache: Object.create(null),
+
       openEpisodeId: null,
+
+      // ✅ "append" when opening via 💭 bubble (keep saved notes outside; draft empty)
+      // ✅ "edit"   when opening via 📝 (populate editor with saved notes)
       openMode: null,
+
+      // episodeIds known to have notes (from summary endpoint)
       episodesWithNotes: new Set()
     }
   };
+
+  /***********************
+   * Podcast sort preference helpers (persist to localStorage)
+   * Only affects the podcast column rendering.
+   ***********************/
+  function getPodcastSortPref() {
+    try { return localStorage.getItem("podcast_sort") || "added"; } catch { return "added"; }
+  }
+  function setPodcastSortPref(v) {
+    try { localStorage.setItem("podcast_sort", String(v || "added")); } catch {}
+  }
 
   /***********************
    * UI Helpers
@@ -94,7 +115,10 @@
       .replace(/'/g, "&#39;");
   }
 
-  // render note text where URLs become a clickable 🔗 emoji
+  // ✅ render note text where URLs become a clickable 🔗 emoji
+  // - Keeps storage unchanged (we only transform at render-time)
+  // - Supports multiple URLs
+  // - Preserves newlines in display via <br>
   function renderTextWithLinkEmojis(raw) {
     const text = String(raw ?? "");
 
@@ -108,8 +132,10 @@
       const url = m[0];
       const idx = m.index ?? 0;
 
+      // Non-url text
       out += escapeHtml(text.slice(last, idx));
 
+      // URL -> 🔗 emoji anchor
       const safeUrl = escapeHtml(url);
       out += `<a class="epnote-link-emoji" href="${safeUrl}" target="_blank" rel="noopener noreferrer" title="${safeUrl}" aria-label="Open link">🔗</a>`;
 
@@ -118,6 +144,7 @@
 
     out += escapeHtml(text.slice(last));
 
+    // Preserve newline display in saved notes view
     return out.replace(/\n/g, "<br>");
   }
 
@@ -136,18 +163,6 @@
     return `${h}h ${mm}m`;
   }
 
-  function fmtDateShort(iso) {
-    try {
-      if (!iso) return "";
-      const d = new Date(iso);
-      if (Number.isNaN(d.getTime())) return "";
-      // 2026-02-15 -> 15 Feb 2026
-      return d.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" });
-    } catch {
-      return "";
-    }
-  }
-
   function setStatus(msg) {
     const el = document.getElementById("statusMessage");
     if (!el) return;
@@ -161,6 +176,7 @@
   }
 
   function normalizeTimestamp(s) {
+    // Accept "SS", "MM:SS", "HH:MM:SS". Always return "HH:MM:SS".
     const raw = String(s || "").trim();
     if (!raw) return "00:00:00";
 
@@ -192,6 +208,7 @@
       }))
       .filter((n) => n.timestamp || n.text);
 
+    // keep at least one row if empty
     return out.length ? out : [{ timestamp: "00:00:00", text: "" }];
   }
 
@@ -209,35 +226,17 @@
     `;
   }
 
-  function getSortPref() {
-    try {
-      const raw = localStorage.getItem(STORAGE_SORT_KEY);
-      if (!raw) return DEFAULT_SORT;
-      if (["name", "added", "released"].includes(raw)) return raw;
-      return DEFAULT_SORT;
-    } catch {
-      return DEFAULT_SORT;
-    }
-  }
-
-  function setSortPref(val) {
-    try {
-      if (!["name", "added", "released"].includes(val)) val = DEFAULT_SORT;
-      localStorage.setItem(STORAGE_SORT_KEY, val);
-    } catch {}
-  }
-
   function buildShell() {
     if (!appMain) return;
-  
+
     appMain.innerHTML = `
       <p class="status" id="statusMessage"></p>
-  
+
       <div class="app-grid">
-  
+
         <!-- LEFT COLUMN -->
         <div class="col col-left">
-  
+
           <section class="panel">
             <div class="panel-header">
               <h2 class="panel-title">Statistics</h2>
@@ -246,7 +245,7 @@
               <div class="stats-grid" id="statsGrid"></div>
             </div>
           </section>
-  
+
           <section class="panel" style="margin-top:16px;">
             <div class="panel-header">
               <h2 class="panel-title">Others playlists</h2>
@@ -255,7 +254,7 @@
               <div class="cards cards-compact" id="othersCards"></div>
             </div>
           </section>
-  
+
           <section class="panel" style="margin-top:16px;">
             <div class="panel-header">
               <h2 class="panel-title">Year Summary Playlist</h2>
@@ -264,14 +263,14 @@
               <div class="cards cards-compact" id="yearSummaryCards"></div>
             </div>
           </section>
-  
+
         </div>
-  
+
         <!-- MIDDLE COLUMN -->
         <section class="panel col col-mid">
           <div class="panel-body col-scroll-body">
             <div class="filter-pills" id="filterPills"></div>
-  
+
             <div class="subpanel subpanel-flex" style="margin-top:12px;">
               <div class="subpanel-header">
                 <h2 class="panel-title">Playlists</h2>
@@ -281,24 +280,24 @@
             </div>
           </div>
         </section>
-  
+
         <!-- RIGHT COLUMN -->
         <aside class="panel col col-right">
           <div class="panel-header">
             <h2 class="panel-title">Podcast Episodes</h2>
-  
-            <!-- MOVED: Sort control for podcasts (was previously in middle column) -->
-            <div style="margin-left:auto; display:flex; align-items:center; gap:8px;">
-              <label for="sortSelectRight" style="color:var(--muted2); font-weight:600; letter-spacing:0.06em; margin-right:6px;">Sort</label>
-              <select id="sortSelectRight" class="sort-select" aria-label="Sort podcast episodes">
-                <option value="name">Name (A → Z)</option>
-                <option value="added">➕ Added (newest)</option>
-                <option value="released">🍃 Released (newest)</option>
-              </select>
-            </div>
           </div>
           <div class="panel-body col-scroll-body">
-  
+
+            <!-- Podcast-level sort control (podcast-only) -->
+            <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
+              <label style="color:var(--muted2); font-size:13px; white-space:nowrap;">Sort</label>
+              <select id="podcastSortSelect" style="min-width:170px; border-radius:999px; padding:6px 10px;">
+                <option value="added">➕ Added (newest)</option>
+                <option value="released">🍃 Released (newest)</option>
+                <option value="name">A → Z (title)</option>
+              </select>
+            </div>
+
             <div class="podcast-head" id="podcastHead" hidden>
               <img class="podcast-thumb" id="podcastThumb" alt="">
               <div style="min-width:0">
@@ -306,17 +305,17 @@
                 <div class="podcast-sub" id="podcastSub"></div>
               </div>
             </div>
-  
+
             <div class="podcast-empty" id="podcastEmpty"></div>
             <div class="podcast-error" id="podcastError" hidden></div>
-  
+
             <!-- ✅ UL is the scroll container -->
             <ul class="podcast-list" id="podcastList"></ul>
           </div>
         </aside>
-  
+
       </div>
-  
+
       <!-- MODAL -->
       <div class="modal-backdrop" id="modalBackdrop" aria-hidden="true">
         <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
@@ -324,7 +323,7 @@
             <h3 class="modal-title" id="modalTitle">Playlist</h3>
             <button class="modal-close" id="modalCloseBtn" type="button">Close</button>
           </div>
-  
+
           <div class="detail-head">
             <img class="detail-thumb" id="detailThumb" alt="">
             <div style="min-width:0">
@@ -332,13 +331,12 @@
               <p class="detail-sub" id="detailSub"></p>
             </div>
           </div>
-  
+
           <ul class="tracklist" id="tracklist"></ul>
         </div>
       </div>
     `;
-  
-    // hook up modal close
+
     const backdrop = document.getElementById("modalBackdrop");
     const closeBtn = document.getElementById("modalCloseBtn");
     if (closeBtn) closeBtn.addEventListener("click", closeModal);
@@ -350,35 +348,17 @@
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape") closeModal();
     });
-  
-    // Wire sort select (podcast)
-    const sortSelectRight = document.getElementById("sortSelectRight");
-    if (sortSelectRight) {
-      // initialize to persisted preference
-      sortSelectRight.value = getSortPref();
-      sortSelectRight.addEventListener("change", (e) => {
-        const v = e.target.value;
-        setSortPref(v);
-        // re-render podcast list with new sort
+
+    // Wire podcast sort select to only affect podcast column and persist choice
+    const sortSel = document.getElementById("podcastSortSelect");
+    if (sortSel) {
+      // initialize to persisted pref
+      try { sortSel.value = getPodcastSortPref(); } catch {}
+      sortSel.addEventListener("change", (ev) => {
+        const v = ev.target.value;
+        setPodcastSortPref(v);
+        // only re-render podcast column (do not touch playlists)
         renderPodcastColumn();
-        // keep playlists in sync if you want them to reflect same pref:
-        renderPlaylists();
-        renderOthers();
-        renderYearSummary();
-      });
-    }
-  
-    // Keep backwards compatibility: support any existing sortSelect (if present elsewhere)
-    const sortSelect = document.getElementById("sortSelect");
-    if (sortSelect) {
-      sortSelect.value = getSortPref();
-      sortSelect.addEventListener("change", (e) => {
-        const v = e.target.value;
-        setSortPref(v);
-        renderPodcastColumn();
-        renderPlaylists();
-        renderOthers();
-        renderYearSummary();
       });
     }
   }
@@ -513,11 +493,6 @@
   /***********************
    * Song-hours: client-side worker compute (NO /api/song-hours)
    ***********************/
-  // ... (unchanged worker code) ...
-  // For brevity in this print, the worker functions are unchanged from your version
-  // — startSongHoursComputeClientSide, ensureSongHoursWorker, stopSongHoursWorker, gatherCorePlaylistIdsForSongHours
-  // (they remain below unchanged). To keep this message focused: assume unchanged.
-
   function stopSongHoursWorker() {
     try {
       if (state.songHours.worker) {
@@ -535,7 +510,134 @@
   function ensureSongHoursWorker() {
     if (state.songHours.worker) return state.songHours.worker;
 
-    const WORKER_SOURCE = `...worker source omitted in message for brevity...`;
+    const WORKER_SOURCE = `
+      const API_PLAYLIST = "/api/playlist";
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+      function safeJsonParse(text) {
+        try { return text ? JSON.parse(text) : null; } catch { return null; }
+      }
+
+      async function fetchPlaylistPage({ playlistId, limit, offset }) {
+        const res = await fetch(API_PLAYLIST, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({ playlistId, limit, offset })
+        });
+
+        const text = await res.text();
+        const data = safeJsonParse(text);
+
+        if (!res.ok || !data) {
+          const msg = (data && (data.message || data.error)) || text || ("HTTP " + res.status);
+          throw new Error("Playlist " + playlistId + " failed: " + msg);
+        }
+
+        const items = Array.isArray(data.items) ? data.items : [];
+
+        const nextOffset =
+          (Number.isFinite(Number(data.nextOffset)) ? Number(data.nextOffset) : null) ??
+          (Number.isFinite(Number(data.nextPageOffset)) ? Number(data.nextPageOffset) : null) ??
+          null;
+
+        const hasMore =
+          (typeof data.hasMore === "boolean" ? data.hasMore : null) ??
+          (typeof data.more === "boolean" ? data.more : null) ??
+          null;
+
+        return { items, nextOffset, hasMore };
+      }
+
+      function sumTrackMs(items) {
+        let ms = 0;
+        for (const it of items) {
+          if ((it?.type || "") !== "track") continue;
+          ms += Number(it?.durationMs) || 0;
+        }
+        return ms;
+      }
+
+      async function fetchPlaylistDurationMs(playlistId, { limit = 200 } = {}) {
+        let totalMs = 0;
+        let offset = 0;
+        let safetyPages = 0;
+
+        while (true) {
+          safetyPages++;
+          if (safetyPages > 200) break;
+
+          const { items, nextOffset, hasMore } = await fetchPlaylistPage({
+            playlistId,
+            limit,
+            offset
+          });
+
+          totalMs += sumTrackMs(items);
+
+          const gotFullPage = items.length >= limit;
+
+          if (hasMore === true) {
+            offset = (nextOffset !== null) ? nextOffset : (offset + limit);
+            continue;
+          }
+
+          if (nextOffset !== null && nextOffset !== offset) {
+            offset = nextOffset;
+            continue;
+          }
+
+          if (gotFullPage) {
+            offset += limit;
+            continue;
+          }
+
+          break;
+        }
+
+        return totalMs;
+      }
+
+      self.onmessage = async (e) => {
+        const msg = e.data || {};
+        const playlistIds = Array.isArray(msg.playlistIds) ? msg.playlistIds : [];
+        const throttleMs = Number(msg.throttleMs);
+        const throttle = Number.isFinite(throttleMs) ? Math.max(0, throttleMs) : 120;
+
+        const limitIn = Number(msg.limit);
+        const limit = Number.isFinite(limitIn) ? Math.min(400, Math.max(50, Math.floor(limitIn))) : 200;
+
+        try {
+          let totalMs = 0;
+
+          for (let i = 0; i < playlistIds.length; i++) {
+            const id = String(playlistIds[i] || "").trim();
+            if (!id) continue;
+
+            self.postMessage({
+              type: "progress",
+              done: i,
+              total: playlistIds.length,
+              playlistId: id,
+              msSoFar: totalMs
+            });
+
+            try {
+              totalMs += await fetchPlaylistDurationMs(id, { limit });
+            } catch (err) {
+              await sleep(500);
+              totalMs += await fetchPlaylistDurationMs(id, { limit });
+            }
+
+            if (throttle) await sleep(throttle);
+          }
+
+          self.postMessage({ type: "done", totalMs });
+        } catch (err) {
+          self.postMessage({ type: "error", message: String(err?.message || err) });
+        }
+      };
+    `;
+
     try {
       const blob = new Blob([WORKER_SOURCE], { type: "text/javascript" });
       const url = URL.createObjectURL(blob);
@@ -617,6 +719,7 @@
   function startSongHoursComputeClientSide() {
     if (!state.snapshot?.totals) return;
 
+    // If we already have exact, don’t recompute
     if (typeof state.snapshot.totals.songMsExact === "number") return;
 
     const playlistIds = gatherCorePlaylistIdsForSongHours();
@@ -650,58 +753,15 @@
     return Array.isArray(list) ? list : [];
   }
 
-  function applySortToArray(arr, type) {
-    // type: name | added | released
-    const copy = Array.isArray(arr) ? arr.slice() : [];
-    if (type === "name") {
-      copy.sort((a, b) => {
-        const A = String(a?.name || "").toLowerCase();
-        const B = String(b?.name || "").toLowerCase();
-        return A < B ? -1 : A > B ? 1 : 0;
-      });
-      return copy;
-    }
-    if (type === "added") {
-      // newest first by addedAt (fallback to name)
-      copy.sort((a, b) => {
-        const ta = a?.addedAt ? Date.parse(a.addedAt) : 0;
-        const tb = b?.addedAt ? Date.parse(b.addedAt) : 0;
-        if (ta === tb) return (String(b?.name || "") > String(a?.name || "")) ? 1 : -1;
-        return tb - ta;
-      });
-      return copy;
-    }
-    if (type === "released") {
-      // newest first by releaseDate or albumReleaseDate, fallback to addedAt then name
-      copy.sort((a, b) => {
-        const ra = a?.releaseDate ? Date.parse(a.releaseDate) : (a?.albumReleaseDate ? Date.parse(a.albumReleaseDate) : 0);
-        const rb = b?.releaseDate ? Date.parse(b.releaseDate) : (b?.albumReleaseDate ? Date.parse(b.albumReleaseDate) : 0);
-        if (ra === rb) {
-          const ta = a?.addedAt ? Date.parse(a.addedAt) : 0;
-          const tb = b?.addedAt ? Date.parse(b.addedAt) : 0;
-          if (ta === tb) return (String(a?.name || "").toLowerCase() < String(b?.name || "").toLowerCase()) ? -1 : 1;
-          return tb - ta;
-        }
-        return rb - ra;
-      });
-      return copy;
-    }
-    return copy;
-  }
-
   function getFilteredPlaylists() {
     const dailyMix = getSection("dailyMix");
     const top = getSection("top");
     const other = getSection("other");
 
-    let list;
-    if (state.filter === "dailyMix") list = dailyMix;
-    else if (state.filter === "top") list = top;
-    else if (state.filter === "other") list = other;
-    else list = [...dailyMix, ...top, ...other];
-
-    const sortType = getSortPref();
-    return applySortToArray(list, sortType);
+    if (state.filter === "dailyMix") return dailyMix;
+    if (state.filter === "top") return top;
+    if (state.filter === "other") return other;
+    return [...dailyMix, ...top, ...other];
   }
 
   function setFilter(next) {
@@ -774,9 +834,7 @@
       url: p.url || null,
       image: p.image || null,
       totalTracks: typeof p.totalTracks === "number" ? p.totalTracks : null,
-      ownerLabel: p.ownerLabel || ownerLabelFallback,
-      addedAt: p.addedAt || p.added_at || null,
-      releaseDate: p.releaseDate || p.release_date || null
+      ownerLabel: p.ownerLabel || ownerLabelFallback
     };
   }
 
@@ -804,11 +862,8 @@
     const el = document.getElementById("othersCards");
     if (!el) return;
 
-    const sortType = getSortPref();
-    const list = applySortToArray(state.others || [], sortType);
-
-    el.innerHTML = list.length
-      ? list.map(cardHtml).join("")
+    el.innerHTML = state.others.length
+      ? state.others.map(cardHtml).join("")
       : `<div class="muted-small">No “others” playlists added.</div>`;
 
     wireCardClicks(el);
@@ -818,11 +873,8 @@
     const el = document.getElementById("yearSummaryCards");
     if (!el) return;
 
-    const sortType = getSortPref();
-    const list = applySortToArray(state.yearSummary || [], sortType);
-
-    el.innerHTML = list.length
-      ? list.map(cardHtml).join("")
+    el.innerHTML = state.yearSummary.length
+      ? state.yearSummary.map(cardHtml).join("")
       : `<div class="muted-small">No year summary playlist added yet.</div>`;
 
     wireCardClicks(el);
@@ -1056,10 +1108,12 @@
    * Podcast panel
    ***********************/
 
+  // ✅ NEW: small helper for /api/playlist JSON parsing
   function safeJsonParse(text) {
     try { return text ? JSON.parse(text) : null; } catch { return null; }
   }
 
+  // ✅ NEW: detect pagination fields consistently (matches your worker logic)
   function extractPaging(data) {
     const nextOffset =
       (Number.isFinite(Number(data?.nextOffset)) ? Number(data.nextOffset) : null) ??
@@ -1074,6 +1128,7 @@
     return { nextOffset, hasMore };
   }
 
+  // ✅ NEW: fetch the podcast playlist in pages (offset pagination)
   async function fetchPodcastEpisodesPaged(playlistId, { limit = 200, maxItems = 5000 } = {}) {
     let playlistMeta = null;
     let offset = 0;
@@ -1105,6 +1160,7 @@
       const items = Array.isArray(data.items) ? data.items : [];
       const eps = items.filter((x) => (x?.type || "") === "episode");
 
+      // Add only new episode ids (guards against APIs that ignore offset)
       let addedThisPage = 0;
       for (const ep of eps) {
         const id = String(ep?.id || "").trim();
@@ -1120,25 +1176,35 @@
 
       const { nextOffset, hasMore } = extractPaging(data);
 
+      // If the API explicitly says there are more pages
       if (hasMore === true) {
         const next = (nextOffset !== null) ? nextOffset : (offset + limit);
+
+        // no-progress guard
         if (next === offset && addedThisPage === 0) break;
+
         offset = next;
         continue;
       }
 
+      // If we have a next offset, trust it
       if (nextOffset !== null && nextOffset !== offset) {
         offset = nextOffset;
         continue;
       }
 
+      // Fallback heuristic: if we got a full page, try the next offset
       if (items.length >= limit) {
         const next = offset + limit;
+
+        // no-progress guard
         if (next === offset && addedThisPage === 0) break;
+
         offset = next;
         continue;
       }
 
+      // Otherwise we’re done
       break;
     }
 
@@ -1150,43 +1216,46 @@
     state.podcast.error = null;
     state.podcast.playlist = null;
     state.podcast.items = [];
-
+  
     const playlistId = PODCAST_PLAYLIST_ID;
+  
+    // page size (Spotify allows up to 100 for many endpoints; your API seems to support 200)
     const limit = 200;
-
+  
     try {
       const allEpisodes = [];
       const seen = new Set();
-
+  
       let offset = 0;
       let safety = 0;
-
+  
       while (true) {
         safety++;
         if (safety > 25) break; // hard safety cap
-
+  
         const res = await fetch(API_PLAYLIST, {
           method: "POST",
           headers: { "Content-Type": "application/json", Accept: "application/json" },
           body: JSON.stringify({ playlistId, limit, offset })
         });
-
+  
         const text = await res.text();
         let data = null;
         try { data = text ? JSON.parse(text) : null; } catch {}
-
+  
         if (!res.ok || !data) {
           const msg = (data && (data.message || data.error)) || text || `HTTP ${res.status}`;
           console.error("Podcast /api/playlist error payload:", { status: res.status, data, text });
           state.podcast.error = msg;
           return;
         }
-
+  
+        // keep playlist meta from the first page
         if (!state.podcast.playlist) state.podcast.playlist = data.playlist || null;
-
+  
         const items = Array.isArray(data.items) ? data.items : [];
         const episodes = items.filter((x) => (x?.type || "") === "episode");
-
+  
         for (const ep of episodes) {
           const id = String(ep?.id || "").trim();
           if (!id) continue;
@@ -1194,66 +1263,50 @@
           seen.add(id);
           allEpisodes.push(ep);
         }
-
+  
         const hasMore =
           (typeof data.hasMore === "boolean" ? data.hasMore : null) ??
           (typeof data.more === "boolean" ? data.more : null) ??
           false;
-
+  
         const nextOffsetRaw =
           (Number.isFinite(Number(data.nextOffset)) ? Number(data.nextOffset) : null) ??
           (Number.isFinite(Number(data.nextPageOffset)) ? Number(data.nextPageOffset) : null) ??
           null;
-
+  
+        // ✅ IMPORTANT: if hasMore is false, stop regardless of nextOffset weirdness
         if (!hasMore) break;
-
+  
+        // if API provides a sane nextOffset use it; otherwise increment by limit
         const nextOffset = (nextOffsetRaw !== null && nextOffsetRaw !== offset) ? nextOffsetRaw : (offset + limit);
-
+  
+        // guard against looping
         if (nextOffset === offset) break;
-
+  
         offset = nextOffset;
       }
-
-      // Sort same as before with added guard — if any addedAt, sort by addedAt desc; otherwise reverse
-      const sortType = getSortPref();
-
-      if (sortType === "name") {
-        allEpisodes.sort((a, b) => {
-          const A = String(a?.name || "").toLowerCase();
-          const B = String(b?.name || "").toLowerCase();
-          return A < B ? -1 : A > B ? 1 : 0;
-        });
-      } else if (sortType === "added") {
+  
+      // Sort same as before
+      const anyAddedAt = allEpisodes.some((x) => !!x?.addedAt);
+      if (anyAddedAt) {
         allEpisodes.sort((a, b) => {
           const ta = a?.addedAt ? Date.parse(a.addedAt) : 0;
           const tb = b?.addedAt ? Date.parse(b.addedAt) : 0;
           return tb - ta;
         });
-      } else if (sortType === "released") {
-        allEpisodes.sort((a, b) => {
-          const ra = a?.releaseDate ? Date.parse(a.releaseDate) : (a?.albumReleaseDate ? Date.parse(a.albumReleaseDate) : 0);
-          const rb = b?.releaseDate ? Date.parse(b.releaseDate) : (b?.albumReleaseDate ? Date.parse(b.albumReleaseDate) : 0);
-          return rb - ra;
-        });
       } else {
-        const anyAddedAt = allEpisodes.some((x) => !!x?.addedAt);
-        if (anyAddedAt) {
-          allEpisodes.sort((a, b) => {
-            const ta = a?.addedAt ? Date.parse(a.addedAt) : 0;
-            const tb = b?.addedAt ? Date.parse(b.addedAt) : 0;
-            return tb - ta;
-          });
-        } else {
-          allEpisodes.reverse();
-        }
+        allEpisodes.reverse();
       }
-
+  
       state.podcast.items = allEpisodes;
     } catch (e) {
       state.podcast.error = String(e?.message || e);
     }
   }
 
+  // ----------------------------
+  // renderPodcastColumn (replaced)
+  // ----------------------------
   function renderPodcastColumn() {
     const head = document.getElementById("podcastHead");
     const empty = document.getElementById("podcastEmpty");
@@ -1267,7 +1320,7 @@
     const tried = state.podcast.tried;
     const error = state.podcast.error;
     const p = state.podcast.playlist;
-    const items = state.podcast.items || [];
+    const originalItems = Array.isArray(state.podcast.items) ? state.podcast.items : [];
 
     if (!tried) {
       head.hidden = true;
@@ -1298,15 +1351,49 @@
     errBox.hidden = true;
     head.hidden = false;
 
+    // Provide thumbnail & header
     thumb.src = p.image || "https://spotify.jdge.cc/images/spotify_logo.png";
     title.textContent = p.name || "Podcast Episodes";
+
+    // Apply podcast-only sort preference (do not mutate original array)
+    const pref = getPodcastSortPref(); // "added" | "released" | "name"
+    let items = originalItems.slice();
+
+    if (pref === "added") {
+      // newest added first (if addedAt exists)
+      items.sort((a, b) => {
+        const ta = a?.addedAt ? Date.parse(a.addedAt) : 0;
+        const tb = b?.addedAt ? Date.parse(b.addedAt) : 0;
+        return tb - ta;
+      });
+    } else if (pref === "released") {
+      // newest release first (use releaseDate or release_date if available)
+      items.sort((a, b) => {
+        const ra = a?.releaseDate || a?.release_date || a?.publishedAt || a?.published_at || null;
+        const rb = b?.releaseDate || b?.release_date || b?.publishedAt || b?.published_at || null;
+        const ta = ra ? Date.parse(ra) : 0;
+        const tb = rb ? Date.parse(rb) : 0;
+        return tb - ta;
+      });
+    } else if (pref === "name") {
+      items.sort((a,b) => String((a?.name||"")).localeCompare(String((b?.name||"")), undefined, { sensitivity: 'base' }));
+    } else {
+      // default fallback: keep server order
+      items = originalItems.slice();
+    }
+
+    // show count
     sub.textContent = `${items.length} items`;
 
-    list.innerHTML = items.map(renderPodcastItem).join("");
+    // render items
+    list.innerHTML = items.map((it) => renderPodcastItem(it)).join("");
     wirePodcastInteractions(list);
     wirePodcastThumbFallbacks(list);
   }
 
+  // ----------------------------
+  // renderPodcastItem (replaced)
+  // ----------------------------
   function renderPodcastItem(it) {
     const episodeId = String(it?.id || "").trim();
     const epImg = it.image || "https://spotify.jdge.cc/images/spotify_logo.png";
@@ -1314,6 +1401,15 @@
     const channel = escapeHtml((it.artists || []).join(", "));
     const dur = fmtDurationFromMs(it.durationMs || 0);
     const url = it.url || "#";
+
+    // Build emoji indicators
+    const addedAtRaw = it.addedAt || it.added_at || it.added || null;
+    const releaseRaw = it.releaseDate || it.release_date || it.publishedAt || it.published_at || null;
+
+    const addedEmoji = addedAtRaw ? `<span class="pod-meta-emoji" title="Added to playlist: ${escapeHtml(String(addedAtRaw))}">➕</span>` : "";
+    const releaseEmoji = releaseRaw ? `<span class="pod-meta-emoji" title="Release date: ${escapeHtml(String(releaseRaw))}">🍃</span>` : "";
+
+    const emojis = (addedEmoji + releaseEmoji) || "";
 
     const isOpen = state.episodeNotes.openEpisodeId && episodeId && state.episodeNotes.openEpisodeId === episodeId;
     const hasNotes = episodeId ? episodeHasNotes(episodeId) : false;
@@ -1325,19 +1421,25 @@
     const savedAt = entry?.savedAt || null;
 
     const mode = isOpen ? state.episodeNotes.openMode : null;
-
     const showSavedBlock = !!episodeId && isOpen && mode === "append" && hasNotes;
-
     const savedBlock = showSavedBlock ? renderSavedNotesBlock(episodeId) : "";
     const editorHtml = isOpen && episodeId ? renderEpisodeNotesEditor(episodeId) : "";
 
     const statusLine = isOpen && episodeId
-      ? `
-        <div class="epnote-status" data-epnote-status="${escapeHtml(episodeId)}">
-          ${saving ? "Saving…" : (err ? `Error: ${escapeHtml(err)}` : (savedAt ? "Saved ✓" : ""))}
-        </div>
-      `
+      ? `<div class="epnote-status" data-epnote-status="${escapeHtml(episodeId)}">${saving ? "Saving…" : (err ? `Error: ${escapeHtml(err)}` : (savedAt ? "Saved ✓" : ""))}</div>`
       : "";
+
+    // Place note button inline in the meta area (keeps existing data attribute)
+    const noteButton = `
+      <button
+        class="epnote-bubble"
+        type="button"
+        title="Notes"
+        aria-label="Notes"
+        data-epnote-toggle="${escapeHtml(episodeId)}"
+        style="opacity:${noteOpacity}; margin-left:8px;"
+      >💭</button>
+    `;
 
     return `
       <li class="podcast-item" data-episode-id="${escapeHtml(episodeId)}">
@@ -1358,17 +1460,15 @@
 
           <div class="podcast-ep-meta">
             <div class="podcast-item-title">${name}</div>
-            <div class="podcast-item-sub">${channel ? channel + " • " : ""}${escapeHtml(dur)} ${renderEpisodeBadges(it)}</div>
+            <div class="podcast-item-sub">
+              ${channel ? channel + " • " : ""}${escapeHtml(dur)} &nbsp; • &nbsp;
+              <span class="pod-meta-emojis">${emojis}</span>
+              ${noteButton}
+            </div>
           </div>
 
-          <button
-            class="epnote-bubble"
-            type="button"
-            title="Notes"
-            aria-label="Notes"
-            data-epnote-toggle="${escapeHtml(episodeId)}"
-            style="opacity:${noteOpacity}"
-          >💭</button>
+          <!-- kept the right column reserved for any status (still required by layout) -->
+          <div style="width:40px"></div>
         </div>
 
         ${savedBlock}
@@ -1376,23 +1476,6 @@
         ${editorHtml}
       </li>
     `;
-  }
-
-  function renderEpisodeBadges(it) {
-    // show emoji badges for addedAt and releaseDate if present
-    const parts = [];
-    if (it?.addedAt) {
-      const d = fmtDateShort(it.addedAt);
-      if (d) parts.push(`➕ ${escapeHtml(d)}`);
-    }
-    if (it?.releaseDate) {
-      const d = fmtDateShort(it.releaseDate);
-      if (d) parts.push(`🍃 ${escapeHtml(d)}`);
-    } else if (it?.albumReleaseDate) {
-      const d = fmtDateShort(it.albumReleaseDate);
-      if (d) parts.push(`🍃 ${escapeHtml(d)}`);
-    }
-    return parts.length ? `• ${parts.join(" • ")}` : "";
   }
 
   function wirePodcastThumbFallbacks(listEl) {
@@ -1412,6 +1495,7 @@
   /***********************
    * Notes editor UI
    ***********************/
+
   function renderEpisodeNotesEditor(episodeId) {
     const entry = getEpisodeCacheEntry(episodeId);
     const mode = state.episodeNotes.openMode || "append";
@@ -1469,7 +1553,7 @@
     if (listEl.__epnoteBound) return;
     listEl.__epnoteBound = true;
 
-    // Force Enter to always insert a newline in the notes textarea
+    // ✅ Force Enter to always insert a newline in the notes textarea
     listEl.addEventListener("keydown", (e) => {
       const el = e.target;
       if (!el || !el.classList || !el.classList.contains("epnote-text")) return;
@@ -1752,8 +1836,6 @@
       const bits = [];
       if (typeof p.totalTracks === "number") bits.push(`${p.totalTracks} items`);
       if (p.ownerLabel) bits.push(p.ownerLabel);
-      if (p.addedAt) bits.push(`➕ ${fmtDateShort(p.addedAt)}`);
-      if (p.releaseDate || p.albumReleaseDate) bits.push(`🍃 ${fmtDateShort(p.releaseDate || p.albumReleaseDate)}`);
       detailSub.textContent = bits.join(" • ");
 
       tracklist.innerHTML = items.map(renderTrack).join("");
@@ -1774,22 +1856,13 @@
     const url = t.url || "#";
     const ms = Number(t.durationMs) || 0;
     const mins = ms ? `${Math.round(ms / 60000)}m` : "";
-
-    const badges = [];
-    if (t.addedAt) badges.push(`➕ ${escapeHtml(fmtDateShort(t.addedAt))}`);
-    if (t.releaseDate) badges.push(`🍃 ${escapeHtml(fmtDateShort(t.releaseDate))}`);
-    if (t.albumReleaseDate && !t.releaseDate) badges.push(`🍃 ${escapeHtml(fmtDateShort(t.albumReleaseDate))}`);
-
-    const right = mins ? mins : "";
-    const meta = [artists].filter(Boolean).join(" • ");
-
     return `
       <li class="track">
-        <div>
+        <div class="track-main">
           <a class="track-name" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${name}</a>
-          <div class="track-meta">${escapeHtml(meta)} ${badges.length ? ' • ' + badges.join(' • ') : ''}</div>
+          <div class="track-meta">${artists}</div>
         </div>
-        <div class="track-right">${escapeHtml(right)}</div>
+        <div class="track-right">${escapeHtml(mins)}</div>
       </li>
     `;
   }
@@ -1867,16 +1940,11 @@
     blankUntilClick();
     if (refreshButton) refreshButton.addEventListener("click", refreshFromSpotify);
 
-    // Initialize sort select if built by something else
-    const sortSelect = document.getElementById("sortSelect");
-    if (sortSelect) {
-      sortSelect.value = getSortPref();
-      sortSelect.addEventListener("change", (e) => {
-        const v = e.target.value;
-        setSortPref(v);
-        renderPlaylists();
-        renderPodcastColumn();
-      });
-    }
+    // If the page already built shell, ensure podcast sort select reflects stored preference
+    // (buildShell also initializes it, but in case of reload, ensure renderPodcastColumn picks up pref)
+    try {
+      const sel = document.getElementById("podcastSortSelect");
+      if (sel) sel.value = getPodcastSortPref();
+    } catch {}
   });
 })();
