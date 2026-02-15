@@ -368,7 +368,6 @@ main {
 
 .cards-compact { padding: 0; }
 
-/* Scrollable cards area (middle playlists) */
 .cards-scroll {
   overflow: auto;
   min-height: 0;
@@ -483,6 +482,26 @@ main {
   border-radius: var(--radius-md);
   padding: 10px;
   font-size: 13px;
+}
+
+/* Sort controls for podcast */
+.sort-btns { display:inline-flex; gap:6px; align-items:center; margin-left:8px; }
+.sort-btn {
+  padding:6px 8px;
+  border-radius:8px;
+  border:1px solid rgba(255,255,255,0.06);
+  background:transparent;
+  cursor:pointer;
+  font-size:13px;
+  color:var(--muted2);
+  transition: background 0.08s ease, color 0.08s ease, transform 0.06s ease;
+}
+.sort-btn:hover { transform: translateY(-1px); color: var(--text); border-color: rgba(255,255,255,0.12); }
+.sort-btn.active {
+  background: rgba(29,185,84,0.08);
+  color: var(--text);
+  border-color: rgba(29,185,84,0.35);
+  box-shadow: 0 6px 14px rgba(0,0,0,0.35);
 }
 
 /* ✅ the UL is the scroll container */
