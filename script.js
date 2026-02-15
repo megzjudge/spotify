@@ -1386,8 +1386,6 @@
     controls.appendChild(button("released", "🍃 Released"));
     controls.appendChild(document.createTextNode("•"));
     controls.appendChild(button("added", "➕ Added"));
-    controls.appendChild(document.createTextNode("•"));
-    controls.appendChild(button("name", "A → Z"));
 
     // wire click handlers
     controls.querySelectorAll(".pod-sort-arrow, .pod-sort-key").forEach((el) => {
@@ -1482,11 +1480,6 @@
         const ra = a?.releaseDate || a?.release_date || a?.publishedAt || a?.published_at || a?.published || null;
         const rb = b?.releaseDate || b?.release_date || b?.publishedAt || b?.published_at || b?.published || null;
         return compareByField(ra, rb, pref.dir, true);
-      });
-    } else if (pref.key === "name") {
-      items.sort((a,b) => {
-        const res = String((a?.name||"")).localeCompare(String((b?.name||"")), undefined, { sensitivity: 'base' });
-        return pref.dir === "asc" ? res : -res;
       });
     } else {
       items = originalItems.slice();
