@@ -90,7 +90,7 @@ body::before{
 body {
   margin: 0;
   color: var(--text);
-  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
   background: transparent;
   -webkit-font-smoothing: antialiased;
 
@@ -578,21 +578,18 @@ main {
 }
 
 /* =========================
-   Podcast header — nav + count (ADDED)
-   This block styles the left/right nav, item count, and integrates with existing
-   #podcastHeadControls which the JS already populates for sort controls.
+   Podcast header — nav + count
+   Styles for pod-head-right, nav buttons, and count badge.
    ========================= */
 
-/* wrapper that holds navigation arrows, count, and sort controls */
 .pod-head-right {
   display: flex;
   align-items: center;
   gap: 12px;
   justify-content: flex-end;
-  min-width: 220px; /* keeps controls from collapsing on wider screens */
+  min-width: 220px;
 }
 
-/* simple rounded arrow buttons for left / right */
 .pod-nav-button {
   appearance: none;
   border: 1px solid rgba(255,255,255,0.06);
@@ -610,7 +607,6 @@ main {
 }
 .pod-nav-button:hover { transform: translateY(-1px); color: var(--spotify-green); background: rgba(29,185,84,0.04); }
 
-/* item-count badge with its own left/right mini controls */
 .pod-count-row {
   display: inline-flex;
   align-items: center;
@@ -625,7 +621,6 @@ main {
   white-space: nowrap;
 }
 
-/* smaller arrow icons used inside the count control (tight spacing) */
 .pod-count-row .mini-arrow {
   width: 28px;
   height: 28px;
@@ -642,7 +637,7 @@ main {
 
 /* make the sort controls (released / added) sit neatly after count */
 #podcastHeadControls {
-  gap: 8px;            /* slightly tighter than the rest */
+  gap: 8px;
   align-items: center;
 }
 
@@ -698,7 +693,8 @@ main {
    UL is the scroll container
 ========================= */
 
-#podcastList {
+/* target both the id and the class — your HTML uses id="podcastList" and sometimes class="podcast-list" */
+#podcastList, .podcast-list {
   list-style: none;
   margin: 0;
   padding: var(--podListPad);
@@ -717,17 +713,17 @@ main {
   scrollbar-color: rgba(255,255,255,0.18) rgba(0,0,0,0.18);
 }
 
-#podcastList::-webkit-scrollbar { width: 10px; }
-#podcastList::-webkit-scrollbar-track {
+#podcastList::-webkit-scrollbar, .podcast-list::-webkit-scrollbar { width: 10px; }
+#podcastList::-webkit-scrollbar-track, .podcast-list::-webkit-scrollbar-track {
   background: rgba(0,0,0,0.18);
   border-left: 1px solid rgba(255,255,255,0.05);
 }
-#podcastList::-webkit-scrollbar-thumb {
+#podcastList::-webkit-scrollbar-thumb, .podcast-list::-webkit-scrollbar-thumb {
   background: rgba(255,255,255,0.14);
   border: 2px solid rgba(0,0,0,0.18);
   border-radius: 999px;
 }
-#podcastList::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.22); }
+#podcastList::-webkit-scrollbar-thumb:hover, .podcast-list::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.22); }
 
 .podcast-item {
   border: 1px solid var(--stroke);
@@ -902,7 +898,6 @@ main {
 
 /* ✅ NEW LAYOUT:
    Timestamp row above the textarea.
-   We keep your existing .epnote-row name, but switch it to stacked mode.
 */
 .epnote-row{
   display: block;
@@ -1186,7 +1181,7 @@ footer {
   .container-header { flex-direction: column; align-items: stretch; }
 
   /* On mobile: don't force 9 rows; use a larger max-height */
-  #podcastList {
+  #podcastList, .podcast-list {
     height: auto;
     max-height: var(--mobileListMaxH);
   }
