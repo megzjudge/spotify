@@ -523,7 +523,7 @@ main {
 
 .podcast-head {
   display: grid;
-  grid-template-columns: 56px 1fr;
+  grid-template-columns: var(--podThumb) 1fr auto;
   gap: 12px;
   align-items: center;
 }
