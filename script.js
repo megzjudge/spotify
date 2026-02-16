@@ -252,6 +252,7 @@
                 <div class="podcast-title" id="podcastTitle"></div>
                 <div class="podcast-sub" id="podcastSub"></div>
               </div>
+              <div id="podcastHeadControls" aria-hidden="false"></div>
             </div>
 
             <div class="podcast-empty" id="podcastEmpty"></div>
