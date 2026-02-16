@@ -1042,10 +1042,9 @@
       return;
     }
   
-    // Apply client-side sorting according to user controls
+    // Sort client-side according to state.podcast.sortBy / sortDir
     const sortBy = state.podcast.sortBy || "released";
     const sortDir = state.podcast.sortDir === "asc" ? 1 : -1;
-  
     items.sort((a, b) => {
       try {
         if (sortBy === "added") {
@@ -1067,8 +1066,7 @@
   
     thumb.src = p.image || "https://spotify.jdge.cc/images/spotify_logo.png";
   
-    // Title row: left = panel title, right = Released control
-    // Count row: left = count, right = Added control
+    // Header: title left, sort control right
     title.innerHTML = `
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
         <div style="font-weight:600;text-align:left;">Podcast Episodes</div>
@@ -1078,6 +1076,7 @@
       </div>
     `;
   
+    // Subheader: count left, other sort control on right
     const countText = `${items.length} items`;
     sub.innerHTML = `
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
@@ -1090,7 +1089,7 @@
       </div>
     `;
   
-    // render list
+    // Render list items
     list.innerHTML = items.map(renderPodcastItem).join("");
     wirePodcastInteractions(list);
     wirePodcastThumbFallbacks(list);
@@ -1128,8 +1127,8 @@
       `
       : "";
   
-    // Inline icons next to duration: separate elements, displayed to the right of the title row
-    const inlineIcons = `<span class="pod-inline-icons" aria-hidden="true" style="margin-left:8px;">🍃 🎯</span>`;
+    // Emojis go on the subtitle row next to the timestamp/duration
+    const emojisHtml = `<span class="pod-inline-icons" aria-hidden="true" style="margin-left:8px;">🍃 🎯</span>`;
   
     return `
       <li class="podcast-item" data-episode-id="${escapeHtml(episodeId)}">
@@ -1151,19 +1150,25 @@
           <div class="podcast-ep-meta">
             <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
               <div class="podcast-item-title" style="flex:1;min-width:0;text-align:left;">${name}</div>
-              <div class="podcast-item-duration" style="white-space:nowrap;">${escapeHtml(dur)} ${inlineIcons}</div>
+              <!-- keep notes bubble on the right -->
+              <div style="margin-left:12px;">
+                <button
+                  class="epnote-bubble"
+                  type="button"
+                  title="Notes"
+                  aria-label="Notes"
+                  data-epnote-toggle="${escapeHtml(episodeId)}"
+                  style="opacity:${noteOpacity}"
+                >💭</button>
+              </div>
             </div>
-            <div class="podcast-item-sub" style="text-align:left;">${channel ? channel : ""}</div>
-          </div>
   
-          <button
-            class="epnote-bubble"
-            type="button"
-            title="Notes"
-            aria-label="Notes"
-            data-epnote-toggle="${escapeHtml(episodeId)}"
-            style="opacity:${noteOpacity}"
-          >💭</button>
+            <!-- subtitle row: channel, duration, emojis -->
+            <div class="podcast-item-sub" style="text-align:left;display:flex;align-items:center;gap:8px;">
+              <div style="white-space:nowrap;">${channel ? channel + " • " : ""}${escapeHtml(dur)}</div>
+              <div>${emojisHtml}</div>
+            </div>
+          </div>
         </div>
   
         ${savedBlock}
