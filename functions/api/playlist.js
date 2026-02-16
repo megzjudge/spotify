@@ -1,5 +1,8 @@
 // functions/api/playlist.js
 
+/* =========================
+   Exports: Cloudflare Pages Functions
+   ========================= */
 export async function onRequestOptions() {
   return new Response(null, {
     status: 204,
@@ -12,12 +15,10 @@ export async function onRequestPost({ env, request }) {
     const body = await request.json().catch(() => ({}));
     const playlistId = String(body.playlistId || "").trim();
 
-    // limit here means "how many normalized items to return" (bounded)
-    // We'll page Spotify (max 100 per request) until we hit this.
+    // how many normalized items to return (bounded)
     const limit = clampInt(body.limit, 0, 500, 200);
 
-    // NEW: offset support (for worker pagination)
-    // offset is the starting Spotify offset for playlist tracks endpoint.
+    // offset support (for worker pagination)
     const offset = clampInt(body.offset, 0, 1000000, 0);
 
     if (!playlistId) {
@@ -30,11 +31,11 @@ export async function onRequestPost({ env, request }) {
     const me = await fetchMe(token);
     const myUserId = me?.id || null;
 
-    // Fetch playlist meta
+    // Fetch playlist meta (cached)
     const pl = await fetchPlaylist(token, playlistId);
     const playlist = normalizePlaylist(pl, myUserId);
 
-    // Items
+    // Items (may be paged)
     const { items, nextOffset, hasMore } =
       limit === 0
         ? { items: [], nextOffset: null, hasMore: false }
@@ -42,7 +43,7 @@ export async function onRequestPost({ env, request }) {
 
     let normalizedItems = items.map(normalizeItem).filter(Boolean);
 
-    // ✅ ENRICH: playlist-items often omit episode artwork.
+    // ENRICH: episodes sometimes miss images; lookup in batches
     const missingEpIds = normalizedItems
       .filter((x) => x.type === "episode" && !x.image && x.id)
       .map((x) => x.id);
@@ -65,14 +66,14 @@ export async function onRequestPost({ env, request }) {
       {
         playlist,
         items: normalizedItems,
-
-        // NEW: worker-friendly paging hints
+        // worker-friendly paging hints
         nextOffset,
         hasMore
       },
       200
     );
   } catch (err) {
+    // surface rich error info
     return json(
       {
         error: "Playlist fetch failed",
@@ -87,20 +88,50 @@ export async function onRequestPost({ env, request }) {
 }
 
 /* =========================
-   AUTH
+   Simple in-memory caches (per worker instance)
+   - TOKEN_CACHE reduces token endpoint calls
+   - PLAYLIST_META_CACHE reduces repeated meta lookups
+========================= */
+const TOKEN_CACHE = { token: null, expiresAt: 0 }; // epoch ms
+const PLAYLIST_META_CACHE = new Map(); // key -> { data, expiresAt }
+
+/* =========================
+   AUTH: cached refresh-token flow
+   - Accepts common env names; logs presence for debugging
 ========================= */
 async function getUserAccessToken(env) {
-  const clientId = env.SPOTIFY_PROFILE;
-  const clientSecret = env.SPOTIFY_KEY;
-  const refreshToken = env.SPOTIFY_REFRESH_TOKEN;
+  const now = Date.now();
 
-  if (!clientId || !clientSecret || !refreshToken) {
-    throw new Error(
-      "Missing Spotify OAuth secrets (SPOTIFY_PROFILE, SPOTIFY_KEY, SPOTIFY_REFRESH_TOKEN)."
-    );
+  // return cached token if still valid (60s safety margin)
+  if (TOKEN_CACHE.token && TOKEN_CACHE.expiresAt - 60000 > now) {
+    return TOKEN_CACHE.token;
   }
 
-  const res = await fetch("https://accounts.spotify.com/api/token", {
+  // resolve env names (accept a few variants)
+  const clientId = env.SPOTIFY_PROFILE || env.SPOTIFY_CLIENT_ID || null;
+  const clientSecret = env.SPOTIFY_KEY || env.SPOTIFY_CLIENT_SECRET || null;
+  const refreshToken =
+    env.SPOTIFY_REFRESH_TOKEN || env.SPOTIFY_RT || env.SPOTIFY_REFRESH || null;
+
+  const present = {
+    SPOTIFY_PROFILE: !!env.SPOTIFY_PROFILE,
+    SPOTIFY_CLIENT_ID: !!env.SPOTIFY_CLIENT_ID,
+    SPOTIFY_KEY: !!env.SPOTIFY_KEY,
+    SPOTIFY_CLIENT_SECRET: !!env.SPOTIFY_CLIENT_SECRET,
+    SPOTIFY_REFRESH_TOKEN: !!env.SPOTIFY_REFRESH_TOKEN
+  };
+  console.info("getUserAccessToken: env keys present:", present);
+
+  if (!clientId || !clientSecret || !refreshToken) {
+    const err = new Error(
+      "Missing Spotify OAuth secrets (expected SPOTIFY_PROFILE or SPOTIFY_CLIENT_ID, SPOTIFY_KEY or SPOTIFY_CLIENT_SECRET, and SPOTIFY_REFRESH_TOKEN)."
+    );
+    err.details = { envPresent: present };
+    console.error("getUserAccessToken: missing env", err.details);
+    throw err;
+  }
+
+  const tokenRes = await fetch("https://accounts.spotify.com/api/token", {
     method: "POST",
     headers: {
       Authorization: "Basic " + btoa(`${clientId}:${clientSecret}`),
@@ -112,56 +143,125 @@ async function getUserAccessToken(env) {
     })
   });
 
-  const text = await res.text();
-  let data = {};
+  const tokenText = await tokenRes.text().catch(() => "");
+  let tokenData = {};
   try {
-    data = text ? JSON.parse(text) : {};
-  } catch {}
+    tokenData = tokenText ? JSON.parse(tokenText) : {};
+  } catch (e) {
+    tokenData = { rawText: tokenText };
+  }
 
-  if (!res.ok || !data?.access_token) {
-    const e = new Error(`Failed to refresh access token (${res.status})`);
-    e.status = res.status;
-    e.details = { endpoint: "token", body: data || text };
+  console.info(
+    "getUserAccessToken: token endpoint status:",
+    tokenRes.status,
+    "bodyPreview:",
+    typeof tokenText === "string" ? tokenText.slice(0, 1000) : tokenText
+  );
+
+  if (!tokenRes.ok || !tokenData?.access_token) {
+    const e = new Error(`Failed to refresh access token (${tokenRes.status})`);
+    e.status = tokenRes.status;
+    e.details = { endpoint: "token", body: tokenData || tokenText };
+    console.error("getUserAccessToken: token refresh failed:", e.details);
     throw e;
   }
 
-  return data.access_token;
+  // cache using expires_in from Spotify (seconds)
+  const expiresIn = Number(tokenData.expires_in) || 3600;
+  TOKEN_CACHE.token = tokenData.access_token;
+  TOKEN_CACHE.expiresAt = Date.now() + expiresIn * 1000;
+
+  console.info("getUserAccessToken: cached token (expires_in seconds):", expiresIn);
+  return TOKEN_CACHE.token;
 }
 
 /* =========================
-   SPOTIFY API (with rich errors)
+   Robust JSON fetch with retries/backoff
+   - respects Retry-After header when present
+   - retries on 429 and 5xx
 ========================= */
-async function fetchJsonOrThrow(url, token, label) {
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` }
-  });
+async function fetchJsonWithRetries(url, token, label, { maxRetries = 3, baseDelay = 400 } = {}) {
+  let attempt = 0;
 
-  const text = await res.text();
-  let data = null;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {}
+  while (true) {
+    attempt++;
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
 
-  if (!res.ok) {
-    const e = new Error(`${label} failed (${res.status})`);
-    e.status = res.status;
-    e.details = { endpoint: url, body: data || text };
-    throw e;
+    const text = await res.text().catch(() => "");
+    let data = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {}
+
+    // success path
+    if (res.ok) {
+      return data;
+    }
+
+    // try to parse Retry-After header
+    const retryAfterRaw = res.headers && typeof res.headers.get === "function"
+      ? res.headers.get("Retry-After") || null
+      : null;
+
+    let retryAfterMs = null;
+    if (retryAfterRaw) {
+      if (/^\d+$/.test(retryAfterRaw.trim())) {
+        retryAfterMs = Number(retryAfterRaw.trim()) * 1000;
+      } else {
+        const parsed = Date.parse(retryAfterRaw);
+        if (!isNaN(parsed)) retryAfterMs = parsed - Date.now();
+      }
+    }
+
+    const status = res.status || 0;
+    const isRetryable = status === 429 || (status >= 500 && status < 600);
+
+    // no more retries or not retryable -> throw rich error
+    if (!isRetryable || attempt > maxRetries) {
+      const e = new Error(`${label} failed (${status})`);
+      e.status = status;
+      e.details = { endpoint: url, body: data || text, retryAfter: retryAfterRaw ?? null };
+      throw e;
+    }
+
+    // compute delay: prefer Retry-After if provided, otherwise exponential backoff with jitter
+    const delayMs = retryAfterMs != null
+      ? Math.max(0, retryAfterMs)
+      : Math.round(baseDelay * Math.pow(2, attempt - 1) * (0.8 + Math.random() * 0.4));
+
+    console.warn(
+      `${label} (${status}) - attempt ${attempt}/${maxRetries}, retrying in ${delayMs}ms`,
+      { endpoint: url, retryAfter: retryAfterRaw, bodyPreview: typeof text === "string" ? text.slice(0, 200) : text }
+    );
+
+    await new Promise((r) => setTimeout(r, delayMs));
+    // retry loop
   }
-
-  return data;
 }
 
+/* =========================
+   API wrappers (use fetchJsonWithRetries)
+========================= */
 async function fetchMe(token) {
-  return fetchJsonOrThrow("https://api.spotify.com/v1/me", token, "/me");
+  return fetchJsonWithRetries("https://api.spotify.com/v1/me", token, "/me", { maxRetries: 2 });
 }
 
 async function fetchPlaylist(token, playlistId) {
-  return fetchJsonOrThrow(
+  const key = `pl:${playlistId}`;
+  const cached = readPlaylistMetaCache(key);
+  if (cached) return cached;
+
+  const data = await fetchJsonWithRetries(
     `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}`,
     token,
-    "playlist meta"
+    "playlist meta",
+    { maxRetries: 3 }
   );
+
+  cachePlaylistMeta(key, data, 60_000); // cache for 60s
+  return data;
 }
 
 /**
@@ -190,7 +290,7 @@ async function fetchPlaylistItemsBounded(token, playlistId, maxItems, startOffse
       `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}/tracks` +
       `?limit=${pageLimit}&offset=${offset}`;
 
-    const data = await fetchJsonOrThrow(url, token, "playlist items");
+    const data = await fetchJsonWithRetries(url, token, "playlist items", { maxRetries: 3 });
 
     const pageItems = Array.isArray(data.items) ? data.items : [];
     items = items.concat(pageItems);
@@ -215,28 +315,41 @@ async function fetchPlaylistItemsBounded(token, playlistId, maxItems, startOffse
   return { items, nextOffset, hasMore };
 }
 
-// ✅ Episode enrichment lookup (50 ids per request)
+// Episode enrichment lookup (50 ids per request)
 async function fetchEpisodesByIds(token, ids) {
-  const clean = (ids || [])
-    .map((x) => String(x || "").trim())
-    .filter(Boolean);
-
+  const clean = (ids || []).map((x) => String(x || "").trim()).filter(Boolean);
   if (!clean.length) return [];
 
   const out = [];
   for (let i = 0; i < clean.length; i += 50) {
     const chunk = clean.slice(i, i + 50);
     const url = `https://api.spotify.com/v1/episodes?ids=${encodeURIComponent(chunk.join(","))}`;
-    const data = await fetchJsonOrThrow(url, token, "episodes lookup");
+    const data = await fetchJsonWithRetries(url, token, "episodes lookup", { maxRetries: 2 });
     out.push(...(data.episodes || []));
   }
   return out;
 }
 
 /* =========================
+   Simple playlist meta cache helpers
+========================= */
+function cachePlaylistMeta(key, data, ttlMs = 60_000) {
+  PLAYLIST_META_CACHE.set(key, { data, expiresAt: Date.now() + ttlMs });
+}
+
+function readPlaylistMetaCache(key) {
+  const entry = PLAYLIST_META_CACHE.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    PLAYLIST_META_CACHE.delete(key);
+    return null;
+  }
+  return entry.data;
+}
+
+/* =========================
    NORMALIZATION
 ========================= */
-
 function pickFirstImageUrl(images) {
   if (!Array.isArray(images) || !images.length) return null;
   return images?.[0]?.url || null;
