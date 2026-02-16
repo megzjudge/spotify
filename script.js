@@ -1,3 +1,4 @@
+
 // script.js
 
 (() => {
@@ -85,17 +86,6 @@
       episodesWithNotes: new Set()
     }
   };
-
-  /***********************
-   * Podcast sort preference helpers (persist to localStorage)
-   * Only affects the podcast column rendering.
-   ***********************/
-  function getPodcastSortPref() {
-    try { return localStorage.getItem("podcast_sort") || "added"; } catch { return "added"; }
-  }
-  function setPodcastSortPref(v) {
-    try { localStorage.setItem("podcast_sort", String(v || "added")); } catch {}
-  }
 
   /***********************
    * UI Helpers
@@ -288,16 +278,6 @@
           </div>
           <div class="panel-body col-scroll-body">
 
-            <!-- Podcast-level sort control (podcast-only) -->
-            <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
-              <label style="color:var(--muted2); font-size:13px; white-space:nowrap;">Sort</label>
-              <select id="podcastSortSelect" style="min-width:170px; border-radius:999px; padding:6px 10px;">
-                <option value="added">➕ Added (newest)</option>
-                <option value="released">🍃 Released (newest)</option>
-                <option value="name">A → Z (title)</option>
-              </select>
-            </div>
-
             <div class="podcast-head" id="podcastHead" hidden>
               <img class="podcast-thumb" id="podcastThumb" alt="">
               <div style="min-width:0">
@@ -348,19 +328,6 @@
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape") closeModal();
     });
-
-    // Wire podcast sort select to only affect podcast column and persist choice
-    const sortSel = document.getElementById("podcastSortSelect");
-    if (sortSel) {
-      // initialize to persisted pref
-      try { sortSel.value = getPodcastSortPref(); } catch {}
-      sortSel.addEventListener("change", (ev) => {
-        const v = ev.target.value;
-        setPodcastSortPref(v);
-        // only re-render podcast column (do not touch playlists)
-        renderPodcastColumn();
-      });
-    }
   }
 
   /***********************
@@ -1304,9 +1271,6 @@
     }
   }
 
-  // ----------------------------
-  // renderPodcastColumn (replaced)
-  // ----------------------------
   function renderPodcastColumn() {
     const head = document.getElementById("podcastHead");
     const empty = document.getElementById("podcastEmpty");
@@ -1320,7 +1284,7 @@
     const tried = state.podcast.tried;
     const error = state.podcast.error;
     const p = state.podcast.playlist;
-    const originalItems = Array.isArray(state.podcast.items) ? state.podcast.items : [];
+    const items = state.podcast.items || [];
 
     if (!tried) {
       head.hidden = true;
@@ -1351,49 +1315,15 @@
     errBox.hidden = true;
     head.hidden = false;
 
-    // Provide thumbnail & header
     thumb.src = p.image || "https://spotify.jdge.cc/images/spotify_logo.png";
     title.textContent = p.name || "Podcast Episodes";
-
-    // Apply podcast-only sort preference (do not mutate original array)
-    const pref = getPodcastSortPref(); // "added" | "released" | "name"
-    let items = originalItems.slice();
-
-    if (pref === "added") {
-      // newest added first (if addedAt exists)
-      items.sort((a, b) => {
-        const ta = a?.addedAt ? Date.parse(a.addedAt) : 0;
-        const tb = b?.addedAt ? Date.parse(b.addedAt) : 0;
-        return tb - ta;
-      });
-    } else if (pref === "released") {
-      // newest release first (use releaseDate or release_date if available)
-      items.sort((a, b) => {
-        const ra = a?.releaseDate || a?.release_date || a?.publishedAt || a?.published_at || null;
-        const rb = b?.releaseDate || b?.release_date || b?.publishedAt || b?.published_at || null;
-        const ta = ra ? Date.parse(ra) : 0;
-        const tb = rb ? Date.parse(rb) : 0;
-        return tb - ta;
-      });
-    } else if (pref === "name") {
-      items.sort((a,b) => String((a?.name||"")).localeCompare(String((b?.name||"")), undefined, { sensitivity: 'base' }));
-    } else {
-      // default fallback: keep server order
-      items = originalItems.slice();
-    }
-
-    // show count
     sub.textContent = `${items.length} items`;
 
-    // render items
-    list.innerHTML = items.map((it) => renderPodcastItem(it)).join("");
+    list.innerHTML = items.map(renderPodcastItem).join("");
     wirePodcastInteractions(list);
     wirePodcastThumbFallbacks(list);
   }
 
-  // ----------------------------
-  // renderPodcastItem (replaced)
-  // ----------------------------
   function renderPodcastItem(it) {
     const episodeId = String(it?.id || "").trim();
     const epImg = it.image || "https://spotify.jdge.cc/images/spotify_logo.png";
@@ -1401,15 +1331,6 @@
     const channel = escapeHtml((it.artists || []).join(", "));
     const dur = fmtDurationFromMs(it.durationMs || 0);
     const url = it.url || "#";
-
-    // Build emoji indicators
-    const addedAtRaw = it.addedAt || it.added_at || it.added || null;
-    const releaseRaw = it.releaseDate || it.release_date || it.publishedAt || it.published_at || null;
-
-    const addedEmoji = addedAtRaw ? `<span class="pod-meta-emoji" title="Added to playlist: ${escapeHtml(String(addedAtRaw))}">➕</span>` : "";
-    const releaseEmoji = releaseRaw ? `<span class="pod-meta-emoji" title="Release date: ${escapeHtml(String(releaseRaw))}">🍃</span>` : "";
-
-    const emojis = (addedEmoji + releaseEmoji) || "";
 
     const isOpen = state.episodeNotes.openEpisodeId && episodeId && state.episodeNotes.openEpisodeId === episodeId;
     const hasNotes = episodeId ? episodeHasNotes(episodeId) : false;
@@ -1421,25 +1342,19 @@
     const savedAt = entry?.savedAt || null;
 
     const mode = isOpen ? state.episodeNotes.openMode : null;
+
     const showSavedBlock = !!episodeId && isOpen && mode === "append" && hasNotes;
+
     const savedBlock = showSavedBlock ? renderSavedNotesBlock(episodeId) : "";
     const editorHtml = isOpen && episodeId ? renderEpisodeNotesEditor(episodeId) : "";
 
     const statusLine = isOpen && episodeId
-      ? `<div class="epnote-status" data-epnote-status="${escapeHtml(episodeId)}">${saving ? "Saving…" : (err ? `Error: ${escapeHtml(err)}` : (savedAt ? "Saved ✓" : ""))}</div>`
+      ? `
+        <div class="epnote-status" data-epnote-status="${escapeHtml(episodeId)}">
+          ${saving ? "Saving…" : (err ? `Error: ${escapeHtml(err)}` : (savedAt ? "Saved ✓" : ""))}
+        </div>
+      `
       : "";
-
-    // Place note button inline in the meta area (keeps existing data attribute)
-    const noteButton = `
-      <button
-        class="epnote-bubble"
-        type="button"
-        title="Notes"
-        aria-label="Notes"
-        data-epnote-toggle="${escapeHtml(episodeId)}"
-        style="opacity:${noteOpacity}; margin-left:8px;"
-      >💭</button>
-    `;
 
     return `
       <li class="podcast-item" data-episode-id="${escapeHtml(episodeId)}">
@@ -1460,15 +1375,17 @@
 
           <div class="podcast-ep-meta">
             <div class="podcast-item-title">${name}</div>
-            <div class="podcast-item-sub">
-              ${channel ? channel + " • " : ""}${escapeHtml(dur)} &nbsp; • &nbsp;
-              <span class="pod-meta-emojis">${emojis}</span>
-              ${noteButton}
-            </div>
+            <div class="podcast-item-sub">${channel ? channel + " • " : ""}${escapeHtml(dur)}</div>
           </div>
 
-          <!-- kept the right column reserved for any status (still required by layout) -->
-          <div style="width:40px"></div>
+          <button
+            class="epnote-bubble"
+            type="button"
+            title="Notes"
+            aria-label="Notes"
+            data-epnote-toggle="${escapeHtml(episodeId)}"
+            style="opacity:${noteOpacity}"
+          >💭</button>
         </div>
 
         ${savedBlock}
@@ -1495,7 +1412,6 @@
   /***********************
    * Notes editor UI
    ***********************/
-
   function renderEpisodeNotesEditor(episodeId) {
     const entry = getEpisodeCacheEntry(episodeId);
     const mode = state.episodeNotes.openMode || "append";
@@ -1939,12 +1855,5 @@
   document.addEventListener("DOMContentLoaded", () => {
     blankUntilClick();
     if (refreshButton) refreshButton.addEventListener("click", refreshFromSpotify);
-
-    // If the page already built shell, ensure podcast sort select reflects stored preference
-    // (buildShell also initializes it, but in case of reload, ensure renderPodcastColumn picks up pref)
-    try {
-      const sel = document.getElementById("podcastSortSelect");
-      if (sel) sel.value = getPodcastSortPref();
-    } catch {}
   });
 })();
