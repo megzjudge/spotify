@@ -1,4 +1,3 @@
-
 // script.js
 
 (() => {
@@ -86,6 +85,119 @@
       episodesWithNotes: new Set()
     }
   };
+
+  /***********************
+   * Playlist helper (cooldown + dedupe + short caching)
+   *
+   * Inserted patch - use this instead of raw fetch(API_PLAYLIST, ...)
+   ***********************/
+  const _playlistLocks = new Map(); // cacheKey -> { promise, resolve, reject }
+  const _playlistCache = new Map(); // cacheKey -> { data, ts }
+  const _cooldowns = new Map(); // playlistId -> cooldownUntilMs
+
+  function _cacheKey({ playlistId, limit, offset }) {
+    return `${String(playlistId)}::l${Number(limit || 0)}::o${Number(offset || 0)}`;
+  }
+
+  /**
+   * fetchPlaylistWithCooldown
+   * - playlistId (required)
+   * - limit (default 200)
+   * - offset (default 0)
+   * - force (bypass small metadata cache)
+   *
+   * Returns parsed JSON from /api/playlist or throws an Error.
+   * Throws Error.status===429 on rate-limited responses and sets a cooldown.
+   */
+  async function fetchPlaylistWithCooldown({ playlistId, limit = 200, offset = 0, force = false } = {}) {
+    if (!playlistId) throw new Error("Missing playlistId");
+
+    const key = _cacheKey({ playlistId, limit, offset });
+
+    // small short cache for metadata calls (limit===0)
+    if (!force && limit === 0 && _playlistCache.has(key)) {
+      const cached = _playlistCache.get(key);
+      if (Date.now() - (cached.ts || 0) < 30_000) {
+        return cached.data;
+      } else {
+        _playlistCache.delete(key);
+      }
+    }
+
+    // If upstream cooldown active, throw a 429-ish error
+    const cdUntil = _cooldowns.get(playlistId) || 0;
+    if (cdUntil > Date.now()) {
+      const waitMs = cdUntil - Date.now();
+      const e = new Error(`Rate-limited for ${Math.round(waitMs / 1000)}s`);
+      e.status = 429;
+      e.cooldownMs = waitMs;
+      throw e;
+    }
+
+    // If identical request in-flight, reuse the promise
+    if (_playlistLocks.has(key)) {
+      return _playlistLocks.get(key).promise;
+    }
+
+    let resolveLock, rejectLock;
+    const lockPromise = new Promise((res, rej) => {
+      resolveLock = res;
+      rejectLock = rej;
+    });
+    _playlistLocks.set(key, { promise: lockPromise, resolve: resolveLock, reject: rejectLock });
+
+    try {
+      const res = await fetch(API_PLAYLIST, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ playlistId, limit, offset })
+      });
+
+      const text = await res.text();
+      let data = null;
+      try { data = text ? JSON.parse(text) : null; } catch {}
+
+      if (!res.ok) {
+        // Detect rate-limit and set cooldown
+        if (res.status === 429 || (data && (String(data.message || data.error || "").toLowerCase().includes("rate") || String(data?.status) === "429"))) {
+          let cooldownMs = 30_000;
+          try {
+            const ra = res.headers.get && res.headers.get("Retry-After");
+            if (ra) cooldownMs = Math.max(1000, Number(ra) * 1000);
+          } catch {}
+          _cooldowns.set(playlistId, Date.now() + cooldownMs);
+          const e = new Error(`Upstream rate-limited (${res.status})`);
+          e.status = 429;
+          e.details = data || text;
+          e.cooldownMs = cooldownMs;
+          throw e;
+        }
+
+        const e = new Error((data && (data.message || data.error)) || `HTTP ${res.status}`);
+        e.status = res.status;
+        e.details = data || text;
+        throw e;
+      }
+
+      // success -> small cache for metadata calls
+      if (limit === 0) _playlistCache.set(key, { data, ts: Date.now() });
+
+      resolveLock(data);
+      _playlistLocks.delete(key);
+
+      return data;
+    } catch (err) {
+      // set short cooldown on 429 errors
+      if (err && err.status === 429) {
+        const cd = (err.cooldownMs && Number(err.cooldownMs)) ? Number(err.cooldownMs) : 30_000;
+        _cooldowns.set(playlistId, Date.now() + cd);
+      }
+
+      rejectLock(err);
+      _playlistLocks.delete(key);
+      throw err;
+    }
+  }
 
   /***********************
    * UI Helpers
@@ -777,32 +889,29 @@
 
   /***********************
    * Manual panels (Others + Year Summary)
+   *
+   * Replaced fetchPlaylistMeta to use fetchPlaylistWithCooldown and never throw to caller
    ***********************/
   async function fetchPlaylistMeta(playlistId, ownerLabelFallback) {
-    const res = await fetch(API_PLAYLIST, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ playlistId, limit: 0 })
-    });
-
-    const text = await res.text();
-    let data = null;
-    try { data = text ? JSON.parse(text) : null; } catch {}
-
-    if (!res.ok || !data?.playlist) {
-      console.error("Playlist meta API failure:", { status: res.status, data, text });
+    try {
+      const data = await fetchPlaylistWithCooldown({ playlistId, limit: 0 });
+      if (!data || !data.playlist) {
+        console.warn("Playlist meta returned no playlist:", playlistId, data);
+        return null;
+      }
+      const p = data.playlist;
+      return {
+        id: p.id || playlistId,
+        name: p.name || "Untitled playlist",
+        url: p.url || null,
+        image: p.image || null,
+        totalTracks: typeof p.totalTracks === "number" ? p.totalTracks : null,
+        ownerLabel: p.ownerLabel || ownerLabelFallback
+      };
+    } catch (err) {
+      console.error("Playlist meta API failure:", { err, playlistId });
       return null;
     }
-
-    const p = data.playlist;
-    return {
-      id: p.id || playlistId,
-      name: p.name || "Untitled playlist",
-      url: p.url || null,
-      image: p.image || null,
-      totalTracks: typeof p.totalTracks === "number" ? p.totalTracks : null,
-      ownerLabel: p.ownerLabel || ownerLabelFallback
-    };
   }
 
   async function loadOthersAndYearSummaryFallback() {
@@ -1096,6 +1205,7 @@
   }
 
   // ✅ NEW: fetch the podcast playlist in pages (offset pagination)
+  // Rewritten to use fetchPlaylistWithCooldown and to handle 429 gracefully
   async function fetchPodcastEpisodesPaged(playlistId, { limit = 200, maxItems = 5000 } = {}) {
     let playlistMeta = null;
     let offset = 0;
@@ -1108,18 +1218,18 @@
       safety++;
       if (safety > 200) break; // very hard safety
 
-      const res = await fetch(API_PLAYLIST, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ playlistId, limit, offset })
-      });
-
-      const text = await res.text();
-      const data = safeJsonParse(text);
-
-      if (!res.ok || !data) {
-        const msg = (data && (data.message || data.error)) || text || `HTTP ${res.status}`;
-        throw new Error(msg);
+      let data;
+      try {
+        data = await fetchPlaylistWithCooldown({ playlistId, limit, offset });
+      } catch (err) {
+        if (err && err.status === 429) {
+          // propagate as error so caller can decide; include message
+          const e = new Error(`Rate limited: ${String(err.message || "")}`);
+          e.status = 429;
+          e.cooldownMs = err.cooldownMs;
+          throw e;
+        }
+        throw err;
       }
 
       if (!playlistMeta) playlistMeta = data.playlist || null;
@@ -1178,82 +1288,95 @@
     return { playlist: playlistMeta, episodes: out };
   }
 
+  // Replaced loadPodcastColumn to use fetchPlaylistWithCooldown and handle 429 gracefully
   async function loadPodcastColumn() {
     state.podcast.tried = true;
     state.podcast.error = null;
     state.podcast.playlist = null;
     state.podcast.items = [];
-  
+
     const playlistId = PODCAST_PLAYLIST_ID;
-  
-    // page size (Spotify allows up to 100 for many endpoints; your API seems to support 200)
     const limit = 200;
-  
+    const maxItems = PODCAST_MAX_ITEMS || 5000;
+
     try {
       const allEpisodes = [];
       const seen = new Set();
-  
+
       let offset = 0;
       let safety = 0;
-  
+
       while (true) {
         safety++;
-        if (safety > 25) break; // hard safety cap
-  
-        const res = await fetch(API_PLAYLIST, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Accept: "application/json" },
-          body: JSON.stringify({ playlistId, limit, offset })
-        });
-  
-        const text = await res.text();
-        let data = null;
-        try { data = text ? JSON.parse(text) : null; } catch {}
-  
-        if (!res.ok || !data) {
-          const msg = (data && (data.message || data.error)) || text || `HTTP ${res.status}`;
-          console.error("Podcast /api/playlist error payload:", { status: res.status, data, text });
-          state.podcast.error = msg;
-          return;
+        if (safety > 50) break; // hard safety cap
+
+        let data;
+        try {
+          data = await fetchPlaylistWithCooldown({ playlistId, limit, offset });
+        } catch (err) {
+          if (err && err.status === 429) {
+            const wait = Math.round((err.cooldownMs || 30000) / 1000);
+            state.podcast.error = `Rate limited by Spotify — try again in ${wait}s`;
+            console.warn("Podcast load halted due to rate-limit:", err);
+            break;
+          } else {
+            state.podcast.error = String(err?.message || err) || "Podcast fetch failed";
+            console.error("Podcast load error:", err);
+            break;
+          }
         }
-  
-        // keep playlist meta from the first page
-        if (!state.podcast.playlist) state.podcast.playlist = data.playlist || null;
-  
+
+        if (!state.podcast.playlist && data.playlist) state.podcast.playlist = data.playlist;
+
         const items = Array.isArray(data.items) ? data.items : [];
         const episodes = items.filter((x) => (x?.type || "") === "episode");
-  
+
+        let addedThisPage = 0;
         for (const ep of episodes) {
           const id = String(ep?.id || "").trim();
           if (!id) continue;
           if (seen.has(id)) continue;
           seen.add(id);
           allEpisodes.push(ep);
+          addedThisPage++;
+          if (allEpisodes.length >= maxItems) break;
         }
-  
-        const hasMore =
-          (typeof data.hasMore === "boolean" ? data.hasMore : null) ??
-          (typeof data.more === "boolean" ? data.more : null) ??
-          false;
-  
-        const nextOffsetRaw =
-          (Number.isFinite(Number(data.nextOffset)) ? Number(data.nextOffset) : null) ??
-          (Number.isFinite(Number(data.nextPageOffset)) ? Number(data.nextPageOffset) : null) ??
+
+        if (allEpisodes.length >= maxItems) break;
+
+        const nextOffset =
+          (Number.isFinite(Number(data?.nextOffset)) ? Number(data.nextOffset) : null) ??
+          (Number.isFinite(Number(data?.nextPageOffset)) ? Number(data.nextPageOffset) : null) ??
           null;
-  
-        // ✅ IMPORTANT: if hasMore is false, stop regardless of nextOffset weirdness
-        if (!hasMore) break;
-  
-        // if API provides a sane nextOffset use it; otherwise increment by limit
-        const nextOffset = (nextOffsetRaw !== null && nextOffsetRaw !== offset) ? nextOffsetRaw : (offset + limit);
-  
-        // guard against looping
-        if (nextOffset === offset) break;
-  
-        offset = nextOffset;
+
+        const hasMore =
+          (typeof data?.hasMore === "boolean" ? data.hasMore : null) ??
+          (typeof data?.more === "boolean" ? data.more : null) ??
+          false;
+
+        if (hasMore === true) {
+          const next = (nextOffset !== null) ? nextOffset : (offset + limit);
+          if (next === offset && addedThisPage === 0) break;
+          offset = next;
+          continue;
+        }
+
+        if (nextOffset !== null && nextOffset !== offset) {
+          offset = nextOffset;
+          continue;
+        }
+
+        if (items.length >= limit) {
+          const next = offset + limit;
+          if (next === offset && addedThisPage === 0) break;
+          offset = next;
+          continue;
+        }
+
+        break;
       }
-  
-      // Sort same as before
+
+      // sort/reverse as before
       const anyAddedAt = allEpisodes.some((x) => !!x?.addedAt);
       if (anyAddedAt) {
         allEpisodes.sort((a, b) => {
@@ -1264,7 +1387,7 @@
       } else {
         allEpisodes.reverse();
       }
-  
+
       state.podcast.items = allEpisodes;
     } catch (e) {
       state.podcast.error = String(e?.message || e);
@@ -1711,6 +1834,7 @@
     backdrop.setAttribute("aria-hidden", "true");
   }
 
+  // Replaced openPlaylistModal to use fetchPlaylistWithCooldown (single-page fetch for modal)
   async function openPlaylistModal(playlistId) {
     setStatus("Loading playlist…");
     openModal();
@@ -1727,20 +1851,11 @@
     tracklist.innerHTML = "";
 
     try {
-      const res = await fetch(API_PLAYLIST, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ playlistId })
-      });
+      // fetch one page (fast) to populate modal
+      const data = await fetchPlaylistWithCooldown({ playlistId, limit: 500, offset: 0 });
 
-      const text = await res.text();
-      let data = null;
-      try { data = text ? JSON.parse(text) : null; } catch {}
-
-      if (!res.ok) {
-        const msg = (data && (data.message || data.error)) || text || `HTTP ${res.status}`;
-        console.error("Playlist modal /api/playlist error payload:", { status: res.status, data, text });
-        throw new Error(msg);
+      if (!data || !data.playlist) {
+        throw new Error("No playlist data returned");
       }
 
       const p = data.playlist || {};
@@ -1758,7 +1873,7 @@
       setStatus("");
     } catch (err) {
       console.error(err);
-      setStatus(`Playlist load failed: ${String(err.message || err)}`);
+      setStatus(`Playlist load failed: ${String(err?.message || err)}`);
       tracklist.innerHTML = `<li class="track"><div class="track-main">
         <div class="track-name">Failed to load playlist</div>
         <div class="track-meta">${escapeHtml(String(err.message || err))}</div>
