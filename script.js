@@ -1273,46 +1273,47 @@
       }
     }, true);
 
-  listEl.addEventListener("click", async (e) => {
-    const t = e.target;
+    listEl.addEventListener("click", async (e) => {
+      const t = e.target;
+    
+      const sortBy = t?.getAttribute?.("data-sort");
+      if (sortBy) {
+        e.preventDefault();
+        togglePodcastSort(sortBy);
+        renderPodcastColumn();
+        return;
+      }
+    
+      const toggleId = t?.getAttribute?.("data-epnote-toggle");
+      if (toggleId) {
+        e.preventDefault();
+        await toggleEpisodeEditor(toggleId);
+        return;
+      }
+    
+      const editId = t?.getAttribute?.("data-epnote-edit");
+      if (editId) {
+        e.preventDefault();
+        await openEditorForExistingNotes(editId);
+        return;
+      }
+    
+      const addId = t?.getAttribute?.("data-epnote-add");
+      if (addId) {
+        e.preventDefault();
+        addEpisodeRow(addId);
+        return;
+      }
+    
+      const saveId = t?.getAttribute?.("data-epnote-save");
+      if (saveId) {
+        e.preventDefault();
+        await saveEpisodeFromDom(saveId);
+        return;
+      }
+    });
+  }
   
-    const sortBy = t?.getAttribute?.("data-sort");
-    if (sortBy) {
-      e.preventDefault();
-      togglePodcastSort(sortBy);
-      renderPodcastColumn();
-      return;
-    }
-  
-    const toggleId = t?.getAttribute?.("data-epnote-toggle");
-    if (toggleId) {
-      e.preventDefault();
-      await toggleEpisodeEditor(toggleId);
-      return;
-    }
-  
-    const editId = t?.getAttribute?.("data-epnote-edit");
-    if (editId) {
-      e.preventDefault();
-      await openEditorForExistingNotes(editId);
-      return;
-    }
-  
-    const addId = t?.getAttribute?.("data-epnote-add");
-    if (addId) {
-      e.preventDefault();
-      addEpisodeRow(addId);
-      return;
-    }
-  
-    const saveId = t?.getAttribute?.("data-epnote-save");
-    if (saveId) {
-      e.preventDefault();
-      await saveEpisodeFromDom(saveId);
-      return;
-    }
-  });
-
   function ensureSavedLoadedMaybe(episodeId) {
     const entry = getEpisodeCacheEntry(episodeId);
     if (!entry) return Promise.resolve();
