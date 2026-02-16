@@ -1046,8 +1046,6 @@
     const sortBy = state.podcast.sortBy || "released";
     const sortDir = state.podcast.sortDir === "asc" ? 1 : -1;
   
-    // released = sort by release date (try addedAt, else fall back to name/date fields)
-    // added = sort by addedAt (if present) then fallback to reverse order
     items.sort((a, b) => {
       try {
         if (sortBy === "added") {
@@ -1055,7 +1053,6 @@
           const tb = b?.addedAt ? Date.parse(b.addedAt) : 0;
           return (ta === tb) ? 0 : (ta < tb ? -1 * sortDir : 1 * sortDir);
         } else {
-          // released: try any available release_date or publish metadata, else use addedAt
           const ra = a?.release_date ? Date.parse(a.release_date) : (a?.addedAt ? Date.parse(a.addedAt) : 0);
           const rb = b?.release_date ? Date.parse(b.release_date) : (b?.addedAt ? Date.parse(b.addedAt) : 0);
           return (ra === rb) ? 0 : (ra < rb ? -1 * sortDir : 1 * sortDir);
@@ -1065,17 +1062,16 @@
       }
     });
   
-    // header: populate thumb/title/sub and append sort buttons into the head area
     errBox.hidden = true;
     head.hidden = false;
   
     thumb.src = p.image || "https://spotify.jdge.cc/images/spotify_logo.png";
   
     // Title row: left = panel title, right = Released control
-    // Count row: left = count + Added control on left (per your layout)
+    // Count row: left = count, right = Added control
     title.innerHTML = `
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
-        <div style="font-weight:600;">Podcast Episodes</div>
+        <div style="font-weight:600;text-align:left;">Podcast Episodes</div>
         <div style="display:flex;align-items:center;gap:6px;">
           <button class="pod-sort-btn" data-sort="released" title="Sort by released" aria-label="Sort by released">🍃 ${state.podcast.sortBy === "released" ? (state.podcast.sortDir === "desc" ? "▼" : "▲") : "▲▼"}</button>
         </div>
@@ -1085,11 +1081,12 @@
     const countText = `${items.length} items`;
     sub.innerHTML = `
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+        <div style="display:flex;align-items:center;gap:6px;text-align:left;">
+          <div class="podcast-count">${escapeHtml(countText)}</div>
+        </div>
         <div style="display:flex;align-items:center;gap:6px;">
           <button class="pod-sort-btn" data-sort="added" title="Sort by added" aria-label="Sort by added">🎯 ${state.podcast.sortBy === "added" ? (state.podcast.sortDir === "desc" ? "▼" : "▲") : "▲▼"}</button>
-          <div class="podcast-count" style="margin-left:6px;">${escapeHtml(countText)}</div>
         </div>
-        <div style="font-size:12px;color:var(--muted,#888);">Sorted: ${escapeHtml(state.podcast.sortBy)} ${escapeHtml(state.podcast.sortDir)}</div>
       </div>
     `;
   
@@ -1131,8 +1128,8 @@
       `
       : "";
   
-    // Inline icons next to duration: non-interactive placeholders for now
-    const inlineIcons = `<span class="pod-inline-icons" aria-hidden="true" style="margin-left:8px;">🍃🎯</span>`;
+    // Inline icons next to duration: separate elements, displayed to the right of the title row
+    const inlineIcons = `<span class="pod-inline-icons" aria-hidden="true" style="margin-left:8px;">🍃 🎯</span>`;
   
     return `
       <li class="podcast-item" data-episode-id="${escapeHtml(episodeId)}">
@@ -1153,10 +1150,10 @@
   
           <div class="podcast-ep-meta">
             <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
-              <div class="podcast-item-title">${name}</div>
+              <div class="podcast-item-title" style="flex:1;min-width:0;text-align:left;">${name}</div>
               <div class="podcast-item-duration" style="white-space:nowrap;">${escapeHtml(dur)} ${inlineIcons}</div>
             </div>
-            <div class="podcast-item-sub">${channel ? channel + " • " : ""}${escapeHtml(dur)}</div>
+            <div class="podcast-item-sub" style="text-align:left;">${channel ? channel : ""}</div>
           </div>
   
           <button
