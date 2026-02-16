@@ -10,7 +10,8 @@
 
   // ✅ IMPORTANT:
   // /api/song-hours does NOT exist as a Pages Function right now (GET falls back to HTML, POST is 405).
-  // So we compute exact song-hours client-side via Web Worker and NEVER call /api/song-hours.
+  // We used to compute exact song-hours client-side via a Worker; that caused failures (Worker fetch URL parsing).
+  // Now we will compute an approximate song-hours value locally from the song count.
 
   const PODCAST_PLAYLIST_ID = "2tHrihmpYzDbJ8rit7HtFR";
 
@@ -27,11 +28,9 @@
   const YEAR_SUMMARY_PLAYLIST_IDS = [];
 
   // ✅ Podcast paging config
-  // We page at 200 because your API currently accepts it, but we keep looping with offset.
   const PODCAST_PAGE_LIMIT = 200;
 
   // ✅ Safety cap so we never go crazy if an API bug loops pages.
-  // Set this higher if you genuinely have more than this in the playlist.
   const PODCAST_MAX_ITEMS = 5000;
 
   // ✅ Notes auth (client-side) — stored per-session only.
@@ -53,151 +52,20 @@
     yearSummary: [],
     podcast: { tried: false, error: null, playlist: null, items: [] },
 
-    // ✅ song-hours compute (client-side worker)
+    // song-hours: we keep small state but we no longer spawn a Worker
     songHours: {
-      worker: null,
       running: false,
-      done: 0,
-      total: 0,
-      msSoFar: 0,
       lastError: null
     },
 
     // Episode notes
     episodeNotes: {
-      // episodeId -> {
-      //   savedNotes:[{timestamp,text}],
-      //   draftNotes:[{timestamp,text}],
-      //   loadedSaved:boolean,
-      //   saving:boolean,
-      //   savedAt:number|null,
-      //   error:string|null
-      // }
       cache: Object.create(null),
-
       openEpisodeId: null,
-
-      // ✅ "append" when opening via 💭 bubble (keep saved notes outside; draft empty)
-      // ✅ "edit"   when opening via 📝 (populate editor with saved notes)
       openMode: null,
-
-      // episodeIds known to have notes (from summary endpoint)
       episodesWithNotes: new Set()
     }
   };
-
-  /***********************
-   * Playlist helper (cooldown + dedupe + short caching)
-   *
-   * Inserted patch - use this instead of raw fetch(API_PLAYLIST, ...)
-   ***********************/
-  const _playlistLocks = new Map(); // cacheKey -> { promise, resolve, reject }
-  const _playlistCache = new Map(); // cacheKey -> { data, ts }
-  const _cooldowns = new Map(); // playlistId -> cooldownUntilMs
-
-  function _cacheKey({ playlistId, limit, offset }) {
-    return `${String(playlistId)}::l${Number(limit || 0)}::o${Number(offset || 0)}`;
-  }
-
-  /**
-   * fetchPlaylistWithCooldown
-   * - playlistId (required)
-   * - limit (default 200)
-   * - offset (default 0)
-   * - force (bypass small metadata cache)
-   *
-   * Returns parsed JSON from /api/playlist or throws an Error.
-   * Throws Error.status===429 on rate-limited responses and sets a cooldown.
-   */
-  async function fetchPlaylistWithCooldown({ playlistId, limit = 200, offset = 0, force = false } = {}) {
-    if (!playlistId) throw new Error("Missing playlistId");
-
-    const key = _cacheKey({ playlistId, limit, offset });
-
-    // small short cache for metadata calls (limit===0)
-    if (!force && limit === 0 && _playlistCache.has(key)) {
-      const cached = _playlistCache.get(key);
-      if (Date.now() - (cached.ts || 0) < 30_000) {
-        return cached.data;
-      } else {
-        _playlistCache.delete(key);
-      }
-    }
-
-    // If upstream cooldown active, throw a 429-ish error
-    const cdUntil = _cooldowns.get(playlistId) || 0;
-    if (cdUntil > Date.now()) {
-      const waitMs = cdUntil - Date.now();
-      const e = new Error(`Rate-limited for ${Math.round(waitMs / 1000)}s`);
-      e.status = 429;
-      e.cooldownMs = waitMs;
-      throw e;
-    }
-
-    // If identical request in-flight, reuse the promise
-    if (_playlistLocks.has(key)) {
-      return _playlistLocks.get(key).promise;
-    }
-
-    let resolveLock, rejectLock;
-    const lockPromise = new Promise((res, rej) => {
-      resolveLock = res;
-      rejectLock = rej;
-    });
-    _playlistLocks.set(key, { promise: lockPromise, resolve: resolveLock, reject: rejectLock });
-
-    try {
-      const res = await fetch(API_PLAYLIST, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ playlistId, limit, offset })
-      });
-
-      const text = await res.text();
-      let data = null;
-      try { data = text ? JSON.parse(text) : null; } catch {}
-
-      if (!res.ok) {
-        // Detect rate-limit and set cooldown
-        if (res.status === 429 || (data && (String(data.message || data.error || "").toLowerCase().includes("rate") || String(data?.status) === "429"))) {
-          let cooldownMs = 30_000;
-          try {
-            const ra = res.headers.get && res.headers.get("Retry-After");
-            if (ra) cooldownMs = Math.max(1000, Number(ra) * 1000);
-          } catch {}
-          _cooldowns.set(playlistId, Date.now() + cooldownMs);
-          const e = new Error(`Upstream rate-limited (${res.status})`);
-          e.status = 429;
-          e.details = data || text;
-          e.cooldownMs = cooldownMs;
-          throw e;
-        }
-
-        const e = new Error((data && (data.message || data.error)) || `HTTP ${res.status}`);
-        e.status = res.status;
-        e.details = data || text;
-        throw e;
-      }
-
-      // success -> small cache for metadata calls
-      if (limit === 0) _playlistCache.set(key, { data, ts: Date.now() });
-
-      resolveLock(data);
-      _playlistLocks.delete(key);
-
-      return data;
-    } catch (err) {
-      // set short cooldown on 429 errors
-      if (err && err.status === 429) {
-        const cd = (err.cooldownMs && Number(err.cooldownMs)) ? Number(err.cooldownMs) : 30_000;
-        _cooldowns.set(playlistId, Date.now() + cd);
-      }
-
-      rejectLock(err);
-      _playlistLocks.delete(key);
-      throw err;
-    }
-  }
 
   /***********************
    * UI Helpers
@@ -217,36 +85,21 @@
       .replace(/'/g, "&#39;");
   }
 
-  // ✅ render note text where URLs become a clickable 🔗 emoji
-  // - Keeps storage unchanged (we only transform at render-time)
-  // - Supports multiple URLs
-  // - Preserves newlines in display via <br>
+  // render note text where URLs become a clickable 🔗 emoji
   function renderTextWithLinkEmojis(raw) {
     const text = String(raw ?? "");
-
-    // Basic URL matcher (http/https)
     const re = /\bhttps?:\/\/[^\s<>"')\]]+/gi;
-
     let out = "";
     let last = 0;
-
     for (const m of text.matchAll(re)) {
       const url = m[0];
       const idx = m.index ?? 0;
-
-      // Non-url text
       out += escapeHtml(text.slice(last, idx));
-
-      // URL -> 🔗 emoji anchor
       const safeUrl = escapeHtml(url);
       out += `<a class="epnote-link-emoji" href="${safeUrl}" target="_blank" rel="noopener noreferrer" title="${safeUrl}" aria-label="Open link">🔗</a>`;
-
       last = idx + url.length;
     }
-
     out += escapeHtml(text.slice(last));
-
-    // Preserve newline display in saved notes view
     return out.replace(/\n/g, "<br>");
   }
 
@@ -278,10 +131,8 @@
   }
 
   function normalizeTimestamp(s) {
-    // Accept "SS", "MM:SS", "HH:MM:SS". Always return "HH:MM:SS".
     const raw = String(s || "").trim();
     if (!raw) return "00:00:00";
-
     const parts = raw.split(":").map((x) => x.trim()).filter(Boolean);
     if (parts.length === 1) {
       const ss = clampInt(parts[0], 0, 59, 0);
@@ -309,8 +160,6 @@
         text: String(n?.text || "").trim()
       }))
       .filter((n) => n.timestamp || n.text);
-
-    // keep at least one row if empty
     return out.length ? out : [{ timestamp: "00:00:00", text: "" }];
   }
 
@@ -330,7 +179,6 @@
 
   function buildShell() {
     if (!appMain) return;
-
     appMain.innerHTML = `
       <p class="status" id="statusMessage"></p>
 
@@ -476,11 +324,8 @@
   function computeSongCountFromSnapshot({ includeOthers = false, includeYearSummary = false } = {}) {
     const sections = state.snapshot?.sections || {};
     const getList = (k) => (Array.isArray(sections?.[k]) ? sections[k] : []);
-
     const core = [...getList("dailyMix"), ...getList("top"), ...getList("other")];
-
     const sumTracks = (arr) => arr.reduce((acc, p) => acc + (Number(p?.totalTracks) || 0), 0);
-
     let sum = sumTracks(core);
     if (includeOthers) sum += sumTracks(state.others || []);
     if (includeYearSummary) sum += sumTracks(state.yearSummary || []);
@@ -495,7 +340,6 @@
   }
 
   function getSongHoursDisplay(totals) {
-    // Prefer client-side exact if we computed it
     const exact = totals?.songMsExact;
     const approx = totals?.songMsApprox;
     const status = String(totals?.songHoursStatus || "");
@@ -504,10 +348,7 @@
 
     if (typeof approx === "number") {
       const approxLabel = `~${fmtHoursFromMs(approx)}`;
-      const hint =
-        status === "computing"
-          ? ` (computing… ${state.songHours.total ? `${state.songHours.done}/${state.songHours.total}` : ""})`
-          : "";
+      const hint = status === "computing" ? ` (computing…)` : "";
       return { label: approxLabel, hint };
     }
 
@@ -521,10 +362,7 @@
     const totals = state.snapshot?.totals || {};
     const playlists = totals.playlists ?? "–";
 
-    const computedSongs = computeSongCountFromSnapshot({
-      includeOthers: false,
-      includeYearSummary: false
-    });
+    const computedSongs = computeSongCountFromSnapshot({ includeOthers: false, includeYearSummary: false });
     const songs = computedSongs > 0 ? computedSongs : totals.songs ?? "–";
 
     const songHours = getSongHoursDisplay(totals);
@@ -570,229 +408,22 @@
   }
 
   /***********************
-   * Song-hours: client-side worker compute (NO /api/song-hours)
+   * Song-hours: APPROXIMATE compute (no Worker)
    ***********************/
   function stopSongHoursWorker() {
-    try {
-      if (state.songHours.worker) {
-        state.songHours.worker.terminate();
-      }
-    } catch {}
-    state.songHours.worker = null;
+    // No worker exists anymore. Just reset state bookkeeping.
     state.songHours.running = false;
-    state.songHours.done = 0;
-    state.songHours.total = 0;
-    state.songHours.msSoFar = 0;
     state.songHours.lastError = null;
   }
 
-  function ensureSongHoursWorker() {
-    if (state.songHours.worker) return state.songHours.worker;
-
-    const WORKER_SOURCE = `
-      const API_PLAYLIST = "/api/playlist";
-      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-      function safeJsonParse(text) {
-        try { return text ? JSON.parse(text) : null; } catch { return null; }
-      }
-
-      async function fetchPlaylistPage({ playlistId, limit, offset }) {
-        const res = await fetch(API_PLAYLIST, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Accept: "application/json" },
-          body: JSON.stringify({ playlistId, limit, offset })
-        });
-
-        const text = await res.text();
-        const data = safeJsonParse(text);
-
-        if (!res.ok || !data) {
-          const msg = (data && (data.message || data.error)) || text || ("HTTP " + res.status);
-          throw new Error("Playlist " + playlistId + " failed: " + msg);
-        }
-
-        const items = Array.isArray(data.items) ? data.items : [];
-
-        const nextOffset =
-          (Number.isFinite(Number(data.nextOffset)) ? Number(data.nextOffset) : null) ??
-          (Number.isFinite(Number(data.nextPageOffset)) ? Number(data.nextPageOffset) : null) ??
-          null;
-
-        const hasMore =
-          (typeof data.hasMore === "boolean" ? data.hasMore : null) ??
-          (typeof data.more === "boolean" ? data.more : null) ??
-          null;
-
-        return { items, nextOffset, hasMore };
-      }
-
-      function sumTrackMs(items) {
-        let ms = 0;
-        for (const it of items) {
-          if ((it?.type || "") !== "track") continue;
-          ms += Number(it?.durationMs) || 0;
-        }
-        return ms;
-      }
-
-      async function fetchPlaylistDurationMs(playlistId, { limit = 200 } = {}) {
-        let totalMs = 0;
-        let offset = 0;
-        let safetyPages = 0;
-
-        while (true) {
-          safetyPages++;
-          if (safetyPages > 200) break;
-
-          const { items, nextOffset, hasMore } = await fetchPlaylistPage({
-            playlistId,
-            limit,
-            offset
-          });
-
-          totalMs += sumTrackMs(items);
-
-          const gotFullPage = items.length >= limit;
-
-          if (hasMore === true) {
-            offset = (nextOffset !== null) ? nextOffset : (offset + limit);
-            continue;
-          }
-
-          if (nextOffset !== null && nextOffset !== offset) {
-            offset = nextOffset;
-            continue;
-          }
-
-          if (gotFullPage) {
-            offset += limit;
-            continue;
-          }
-
-          break;
-        }
-
-        return totalMs;
-      }
-
-      self.onmessage = async (e) => {
-        const msg = e.data || {};
-        const playlistIds = Array.isArray(msg.playlistIds) ? msg.playlistIds : [];
-        const throttleMs = Number(msg.throttleMs);
-        const throttle = Number.isFinite(throttleMs) ? Math.max(0, throttleMs) : 120;
-
-        const limitIn = Number(msg.limit);
-        const limit = Number.isFinite(limitIn) ? Math.min(400, Math.max(50, Math.floor(limitIn))) : 200;
-
-        try {
-          let totalMs = 0;
-
-          for (let i = 0; i < playlistIds.length; i++) {
-            const id = String(playlistIds[i] || "").trim();
-            if (!id) continue;
-
-            self.postMessage({
-              type: "progress",
-              done: i,
-              total: playlistIds.length,
-              playlistId: id,
-              msSoFar: totalMs
-            });
-
-            try {
-              totalMs += await fetchPlaylistDurationMs(id, { limit });
-            } catch (err) {
-              await sleep(500);
-              totalMs += await fetchPlaylistDurationMs(id, { limit });
-            }
-
-            if (throttle) await sleep(throttle);
-          }
-
-          self.postMessage({ type: "done", totalMs });
-        } catch (err) {
-          self.postMessage({ type: "error", message: String(err?.message || err) });
-        }
-      };
-    `;
-
-    try {
-      const blob = new Blob([WORKER_SOURCE], { type: "text/javascript" });
-      const url = URL.createObjectURL(blob);
-      const w = new Worker(url);
-      URL.revokeObjectURL(url);
-
-      w.onmessage = (e) => {
-        const msg = e.data || {};
-        if (!state.snapshot?.totals) return;
-
-        if (msg.type === "progress") {
-          state.songHours.running = true;
-          state.songHours.done = Number(msg.done) || 0;
-          state.songHours.total = Number(msg.total) || 0;
-          state.songHours.msSoFar = Number(msg.msSoFar) || 0;
-
-          state.snapshot.totals.songHoursStatus = "computing";
-          renderStatistics();
-          return;
-        }
-
-        if (msg.type === "done") {
-          const totalMs = Number(msg.totalMs);
-          if (Number.isFinite(totalMs) && totalMs > 0) {
-            state.snapshot.totals.songMsExact = totalMs;
-            state.snapshot.totals.songMsExactUpdatedAt = new Date().toISOString();
-            state.snapshot.totals.songHoursStatus = "exact";
-            state.snapshot.totals.songMs = totalMs; // backward compat
-          } else {
-            state.snapshot.totals.songHoursStatus = "approx";
-          }
-
-          state.songHours.running = false;
-          renderStatistics();
-          return;
-        }
-
-        if (msg.type === "error") {
-          state.songHours.running = false;
-          state.songHours.lastError = String(msg.message || "Unknown worker error");
-          state.snapshot.totals.songHoursStatus = "approx";
-          console.warn("song-hours worker error:", state.songHours.lastError);
-          renderStatistics();
-        }
-      };
-
-      w.onerror = (err) => {
-        state.songHours.running = false;
-        state.songHours.lastError = String(err?.message || err);
-        if (state.snapshot?.totals) state.snapshot.totals.songHoursStatus = "approx";
-        console.warn("song-hours worker fatal error:", err);
-        renderStatistics();
-      };
-
-      state.songHours.worker = w;
-      return w;
-    } catch (e) {
-      console.warn("Failed to start song-hours worker:", e);
-      return null;
-    }
-  }
-
-  function gatherCorePlaylistIdsForSongHours() {
-    const sections = state.snapshot?.sections || {};
-    const lists = [
-      ...(Array.isArray(sections.dailyMix) ? sections.dailyMix : []),
-      ...(Array.isArray(sections.top) ? sections.top : []),
-      ...(Array.isArray(sections.other) ? sections.other : [])
-    ];
-
-    const ids = new Set();
-    for (const p of lists) {
-      const id = String(p?.id || "").trim();
-      if (id) ids.add(id);
-    }
-    return Array.from(ids);
+  // Compute an approximate total ms for songs using a conservative average track length.
+  function computeApproxSongMs() {
+    const totals = state.snapshot?.totals || {};
+    // Prefer explicit totals.songs when available
+    const songs = Number(totals?.songs) || computeSongCountFromSnapshot();
+    // Average track length assumption: 3.5 minutes = 210,000 ms
+    const AVG_MS = 210000;
+    return Math.max(0, Math.floor(Number(songs) * AVG_MS));
   }
 
   function startSongHoursComputeClientSide() {
@@ -801,26 +432,17 @@
     // If we already have exact, don’t recompute
     if (typeof state.snapshot.totals.songMsExact === "number") return;
 
-    const playlistIds = gatherCorePlaylistIdsForSongHours();
-    if (!playlistIds.length) return;
-
-    state.snapshot.totals.songHoursStatus = "computing";
-    renderStatistics();
-
-    const w = ensureSongHoursWorker();
-    if (!w) return;
-
-    state.songHours.running = true;
-    state.songHours.done = 0;
-    state.songHours.total = playlistIds.length;
-    state.songHours.msSoFar = 0;
-    state.songHours.lastError = null;
-
-    w.postMessage({
-      playlistIds,
-      throttleMs: 120,
-      limit: 200
-    });
+    try {
+      const approxMs = computeApproxSongMs();
+      state.snapshot.totals.songMsApprox = approxMs;
+      state.snapshot.totals.songHoursStatus = "approx";
+      // render immediately
+      renderStatistics();
+    } catch (err) {
+      console.warn("approx song-hours compute failed:", err);
+      state.songHours.lastError = String(err?.message || err);
+      if (state.snapshot?.totals) state.snapshot.totals.songHoursStatus = "approx";
+    }
   }
 
   /***********************
@@ -889,29 +511,32 @@
 
   /***********************
    * Manual panels (Others + Year Summary)
-   *
-   * Replaced fetchPlaylistMeta to use fetchPlaylistWithCooldown and never throw to caller
    ***********************/
   async function fetchPlaylistMeta(playlistId, ownerLabelFallback) {
-    try {
-      const data = await fetchPlaylistWithCooldown({ playlistId, limit: 0 });
-      if (!data || !data.playlist) {
-        console.warn("Playlist meta returned no playlist:", playlistId, data);
-        return null;
-      }
-      const p = data.playlist;
-      return {
-        id: p.id || playlistId,
-        name: p.name || "Untitled playlist",
-        url: p.url || null,
-        image: p.image || null,
-        totalTracks: typeof p.totalTracks === "number" ? p.totalTracks : null,
-        ownerLabel: p.ownerLabel || ownerLabelFallback
-      };
-    } catch (err) {
-      console.error("Playlist meta API failure:", { err, playlistId });
+    const res = await fetch(API_PLAYLIST, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ playlistId, limit: 0 })
+    });
+
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch {}
+
+    if (!res.ok || !data?.playlist) {
+      console.error("Playlist meta API failure:", { status: res.status, data, text });
       return null;
     }
+
+    const p = data.playlist;
+    return {
+      id: p.id || playlistId,
+      name: p.name || "Untitled playlist",
+      url: p.url || null,
+      image: p.image || null,
+      totalTracks: typeof p.totalTracks === "number" ? p.totalTracks : null,
+      ownerLabel: p.ownerLabel || ownerLabelFallback
+    };
   }
 
   async function loadOthersAndYearSummaryFallback() {
@@ -977,7 +602,6 @@
 
     const entry = c[episodeId];
 
-    // Backward-compat if older cached shape exists
     if (Array.isArray(entry.notes) && !Array.isArray(entry.savedNotes)) {
       entry.savedNotes = normalizeNotesArray(entry.notes);
       entry.loadedSaved = !!entry.loaded;
@@ -1184,12 +808,10 @@
    * Podcast panel
    ***********************/
 
-  // ✅ NEW: small helper for /api/playlist JSON parsing
   function safeJsonParse(text) {
     try { return text ? JSON.parse(text) : null; } catch { return null; }
   }
 
-  // ✅ NEW: detect pagination fields consistently (matches your worker logic)
   function extractPaging(data) {
     const nextOffset =
       (Number.isFinite(Number(data?.nextOffset)) ? Number(data.nextOffset) : null) ??
@@ -1204,32 +826,29 @@
     return { nextOffset, hasMore };
   }
 
-  // ✅ NEW: fetch the podcast playlist in pages (offset pagination)
-  // Rewritten to use fetchPlaylistWithCooldown and to handle 429 gracefully
   async function fetchPodcastEpisodesPaged(playlistId, { limit = 200, maxItems = 5000 } = {}) {
     let playlistMeta = null;
     let offset = 0;
     let safety = 0;
-
     const seenIds = new Set();
     const out = [];
 
     while (true) {
       safety++;
-      if (safety > 200) break; // very hard safety
+      if (safety > 200) break;
 
-      let data;
-      try {
-        data = await fetchPlaylistWithCooldown({ playlistId, limit, offset });
-      } catch (err) {
-        if (err && err.status === 429) {
-          // propagate as error so caller can decide; include message
-          const e = new Error(`Rate limited: ${String(err.message || "")}`);
-          e.status = 429;
-          e.cooldownMs = err.cooldownMs;
-          throw e;
-        }
-        throw err;
+      const res = await fetch(API_PLAYLIST, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ playlistId, limit, offset })
+      });
+
+      const text = await res.text();
+      const data = safeJsonParse(text);
+
+      if (!res.ok || !data) {
+        const msg = (data && (data.message || data.error)) || text || `HTTP ${res.status}`;
+        throw new Error(msg);
       }
 
       if (!playlistMeta) playlistMeta = data.playlist || null;
@@ -1237,7 +856,6 @@
       const items = Array.isArray(data.items) ? data.items : [];
       const eps = items.filter((x) => (x?.type || "") === "episode");
 
-      // Add only new episode ids (guards against APIs that ignore offset)
       let addedThisPage = 0;
       for (const ep of eps) {
         const id = String(ep?.id || "").trim();
@@ -1253,42 +871,31 @@
 
       const { nextOffset, hasMore } = extractPaging(data);
 
-      // If the API explicitly says there are more pages
       if (hasMore === true) {
         const next = (nextOffset !== null) ? nextOffset : (offset + limit);
-
-        // no-progress guard
         if (next === offset && addedThisPage === 0) break;
-
         offset = next;
         continue;
       }
 
-      // If we have a next offset, trust it
       if (nextOffset !== null && nextOffset !== offset) {
         offset = nextOffset;
         continue;
       }
 
-      // Fallback heuristic: if we got a full page, try the next offset
       if (items.length >= limit) {
         const next = offset + limit;
-
-        // no-progress guard
         if (next === offset && addedThisPage === 0) break;
-
         offset = next;
         continue;
       }
 
-      // Otherwise we’re done
       break;
     }
 
     return { playlist: playlistMeta, episodes: out };
   }
 
-  // Replaced loadPodcastColumn to use fetchPlaylistWithCooldown and handle 429 gracefully
   async function loadPodcastColumn() {
     state.podcast.tried = true;
     state.podcast.error = null;
@@ -1297,7 +904,6 @@
 
     const playlistId = PODCAST_PLAYLIST_ID;
     const limit = 200;
-    const maxItems = PODCAST_MAX_ITEMS || 5000;
 
     try {
       const allEpisodes = [];
@@ -1308,75 +914,56 @@
 
       while (true) {
         safety++;
-        if (safety > 50) break; // hard safety cap
+        if (safety > 25) break;
 
-        let data;
-        try {
-          data = await fetchPlaylistWithCooldown({ playlistId, limit, offset });
-        } catch (err) {
-          if (err && err.status === 429) {
-            const wait = Math.round((err.cooldownMs || 30000) / 1000);
-            state.podcast.error = `Rate limited by Spotify — try again in ${wait}s`;
-            console.warn("Podcast load halted due to rate-limit:", err);
-            break;
-          } else {
-            state.podcast.error = String(err?.message || err) || "Podcast fetch failed";
-            console.error("Podcast load error:", err);
-            break;
-          }
+        const res = await fetch(API_PLAYLIST, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({ playlistId, limit, offset })
+        });
+
+        const text = await res.text();
+        let data = null;
+        try { data = text ? JSON.parse(text) : null; } catch {}
+
+        if (!res.ok || !data) {
+          const msg = (data && (data.message || data.error)) || text || `HTTP ${res.status}`;
+          console.error("Podcast /api/playlist error payload:", { status: res.status, data, text });
+          state.podcast.error = msg;
+          return;
         }
 
-        if (!state.podcast.playlist && data.playlist) state.podcast.playlist = data.playlist;
+        if (!state.podcast.playlist) state.podcast.playlist = data.playlist || null;
 
         const items = Array.isArray(data.items) ? data.items : [];
         const episodes = items.filter((x) => (x?.type || "") === "episode");
 
-        let addedThisPage = 0;
         for (const ep of episodes) {
           const id = String(ep?.id || "").trim();
           if (!id) continue;
           if (seen.has(id)) continue;
           seen.add(id);
           allEpisodes.push(ep);
-          addedThisPage++;
-          if (allEpisodes.length >= maxItems) break;
         }
-
-        if (allEpisodes.length >= maxItems) break;
-
-        const nextOffset =
-          (Number.isFinite(Number(data?.nextOffset)) ? Number(data.nextOffset) : null) ??
-          (Number.isFinite(Number(data?.nextPageOffset)) ? Number(data.nextPageOffset) : null) ??
-          null;
 
         const hasMore =
-          (typeof data?.hasMore === "boolean" ? data.hasMore : null) ??
-          (typeof data?.more === "boolean" ? data.more : null) ??
+          (typeof data.hasMore === "boolean" ? data.hasMore : null) ??
+          (typeof data.more === "boolean" ? data.more : null) ??
           false;
 
-        if (hasMore === true) {
-          const next = (nextOffset !== null) ? nextOffset : (offset + limit);
-          if (next === offset && addedThisPage === 0) break;
-          offset = next;
-          continue;
-        }
+        const nextOffsetRaw =
+          (Number.isFinite(Number(data.nextOffset)) ? Number(data.nextOffset) : null) ??
+          (Number.isFinite(Number(data.nextPageOffset)) ? Number(data.nextPageOffset) : null) ??
+          null;
 
-        if (nextOffset !== null && nextOffset !== offset) {
-          offset = nextOffset;
-          continue;
-        }
+        if (!hasMore) break;
 
-        if (items.length >= limit) {
-          const next = offset + limit;
-          if (next === offset && addedThisPage === 0) break;
-          offset = next;
-          continue;
-        }
+        const nextOffset = (nextOffsetRaw !== null && nextOffsetRaw !== offset) ? nextOffsetRaw : (offset + limit);
+        if (nextOffset === offset) break;
 
-        break;
+        offset = nextOffset;
       }
 
-      // sort/reverse as before
       const anyAddedAt = allEpisodes.some((x) => !!x?.addedAt);
       if (anyAddedAt) {
         allEpisodes.sort((a, b) => {
@@ -1592,7 +1179,6 @@
     if (listEl.__epnoteBound) return;
     listEl.__epnoteBound = true;
 
-    // ✅ Force Enter to always insert a newline in the notes textarea
     listEl.addEventListener("keydown", (e) => {
       const el = e.target;
       if (!el || !el.classList || !el.classList.contains("epnote-text")) return;
@@ -1834,7 +1420,6 @@
     backdrop.setAttribute("aria-hidden", "true");
   }
 
-  // Replaced openPlaylistModal to use fetchPlaylistWithCooldown (single-page fetch for modal)
   async function openPlaylistModal(playlistId) {
     setStatus("Loading playlist…");
     openModal();
@@ -1851,11 +1436,20 @@
     tracklist.innerHTML = "";
 
     try {
-      // fetch one page (fast) to populate modal
-      const data = await fetchPlaylistWithCooldown({ playlistId, limit: 500, offset: 0 });
+      const res = await fetch(API_PLAYLIST, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ playlistId })
+      });
 
-      if (!data || !data.playlist) {
-        throw new Error("No playlist data returned");
+      const text = await res.text();
+      let data = null;
+      try { data = text ? JSON.parse(text) : null; } catch {}
+
+      if (!res.ok) {
+        const msg = (data && (data.message || data.error)) || text || `HTTP ${res.status}`;
+        console.error("Playlist modal /api/playlist error payload:", { status: res.status, data, text });
+        throw new Error(msg);
       }
 
       const p = data.playlist || {};
@@ -1873,7 +1467,7 @@
       setStatus("");
     } catch (err) {
       console.error(err);
-      setStatus(`Playlist load failed: ${String(err?.message || err)}`);
+      setStatus(`Playlist load failed: ${String(err.message || err)}`);
       tracklist.innerHTML = `<li class="track"><div class="track-main">
         <div class="track-name">Failed to load playlist</div>
         <div class="track-meta">${escapeHtml(String(err.message || err))}</div>
@@ -1936,11 +1530,17 @@
       state.episodeNotes.openMode = null;
       state.episodeNotes.episodesWithNotes = new Set();
 
-      await Promise.all([
-        loadOthersAndYearSummaryFallback(),
-        loadPodcastColumn(),
-        loadEpisodeNotesSummary()
-      ]);
+      // Run non-critical fetches in parallel but guarded so they can't hang forever
+      const tasks = [
+        (async () => { try { await loadOthersAndYearSummaryFallback(); } catch(e){ console.warn('loadOthers failed', e); } })(),
+        (async () => { try { await loadPodcastColumn(); } catch(e){ console.warn('loadPodcastColumn failed', e); state.podcast.error = state.podcast.error || String(e?.message || e); } })(),
+        (async () => { try { await loadEpisodeNotesSummary(); } catch(e){ console.warn('loadEpisodeNotesSummary failed', e); } })()
+      ];
+
+      await Promise.allSettled(tasks);
+
+      // compute approximate song-hours immediately (no Worker)
+      startSongHoursComputeClientSide();
 
       renderStatistics();
       renderFilterPills();
@@ -1948,12 +1548,6 @@
       renderOthers();
       renderYearSummary();
       renderPodcastColumn();
-
-      const totals = state.snapshot?.totals || {};
-      const totalSongs = Number(totals?.songs) || 0;
-      if (totalSongs > 0 && typeof totals.songMsExact !== "number") {
-        startSongHoursComputeClientSide();
-      }
 
       setStatus("");
     } catch (err) {
