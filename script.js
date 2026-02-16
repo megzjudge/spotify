@@ -1067,28 +1067,35 @@
   
     thumb.src = p.image || "https://spotify.jdge.cc/images/spotify_logo.png";
   
-    // Header: title left, sort control right
-    title.innerHTML = `
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
-        <div style="font-weight:600;text-align:left;">Podcast Episodes</div>
-        <div style="display:flex;align-items:center;gap:6px;">
-          <button class="pod-sort-btn" data-sort="released" title="Sort by released" aria-label="Sort by released">🍃 ${state.podcast.sortBy === "released" ? (state.podcast.sortDir === "desc" ? "▼" : "▲") : "▲▼"}</button>
-        </div>
-      </div>
-    `;
-  
-    // Subheader: count left, other sort control on right
+    // Title + count on the left
+    title.textContent = "Podcast Episodes";
     const countText = `${items.length} items`;
-    sub.innerHTML = `
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
-        <div style="display:flex;align-items:center;gap:6px;text-align:left;">
-          <div class="podcast-count">${escapeHtml(countText)}</div>
+    sub.innerHTML = `<div class="podcast-count" style="font-weight:600;">${escapeHtml(countText)}</div>`;
+
+    // Controls (kept on the right column) — we render buttons here so the header layout is tidy.
+    const controlsEl = document.getElementById("podcastHeadControls");
+    if (controlsEl) {
+      // two small buttons: released (leaf) and added (target)
+      const releasedArrow = state.podcast.sortBy === "released" ? (state.podcast.sortDir === "desc" ? "▼" : "▲") : "▲▼";
+      const addedArrow = state.podcast.sortBy === "added" ? (state.podcast.sortDir === "desc" ? "▼" : "▲") : "▲▼";
+
+      controlsEl.innerHTML = `
+        <div style="display:flex;align-items:center;gap:8px;">
+          <button class="pod-sort-btn" data-sort="released" title="Sort by released" aria-label="Sort by released">🍃 ${releasedArrow}</button>
+          <button class="pod-sort-btn" data-sort="added" title="Sort by added" aria-label="Sort by added">🎯 ${addedArrow}</button>
         </div>
-        <div style="display:flex;align-items:center;gap:6px;">
-          <button class="pod-sort-btn" data-sort="added" title="Sort by added" aria-label="Sort by added">🎯 ${state.podcast.sortBy === "added" ? (state.podcast.sortDir === "desc" ? "▼" : "▲") : "▲▼"}</button>
-        </div>
-      </div>
-    `;
+      `;
+
+      // wire clicks on the controls (keeps sorting logic in togglePodcastSort)
+      controlsEl.querySelectorAll("button[data-sort]").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          const by = btn.getAttribute("data-sort");
+          if (!by) return;
+          togglePodcastSort(by);
+          renderPodcastColumn();
+        });
+      });
+    }
   
     // Render list items
     list.innerHTML = items.map(renderPodcastItem).join("");
