@@ -50,7 +50,15 @@
     filter: "all",
     others: [],
     yearSummary: [],
-    podcast: { tried: false, error: null, playlist: null, items: [] },
+    podcast: {
+      tried: false,
+      error: null,
+      playlist: null,
+      items: [],
+      // sorting for podcast panel
+      sortBy: "released", // "released" | "added"
+      sortDir: "desc" // "asc" | "desc"
+    },
 
     // song-hours: we keep small state but we no longer spawn a Worker
     songHours: {
@@ -469,6 +477,18 @@
     state.filter = next;
     renderFilterPills();
     renderPlaylists();
+  }
+
+  function togglePodcastSort(by) {
+    if (!by) return;
+    const cur = state.podcast.sortBy;
+    if (cur === by) {
+      // toggle direction
+      state.podcast.sortDir = state.podcast.sortDir === "desc" ? "asc" : "desc";
+    } else {
+      state.podcast.sortBy = by;
+      state.podcast.sortDir = "desc";
+    }
   }
 
   function renderFilterPills() {
@@ -990,12 +1010,12 @@
     const sub = document.getElementById("podcastSub");
     const list = document.getElementById("podcastList");
     if (!head || !empty || !errBox || !thumb || !title || !sub || !list) return;
-
+  
     const tried = state.podcast.tried;
     const error = state.podcast.error;
     const p = state.podcast.playlist;
-    const items = state.podcast.items || [];
-
+    let items = Array.isArray(state.podcast.items) ? state.podcast.items.slice() : [];
+  
     if (!tried) {
       head.hidden = true;
       errBox.hidden = true;
@@ -1003,9 +1023,9 @@
       list.innerHTML = "";
       return;
     }
-
+  
     empty.style.display = "none";
-
+  
     if (error) {
       head.hidden = true;
       errBox.hidden = false;
@@ -1013,7 +1033,7 @@
       list.innerHTML = "";
       return;
     }
-
+  
     if (!p) {
       head.hidden = true;
       errBox.hidden = false;
@@ -1021,14 +1041,59 @@
       list.innerHTML = "";
       return;
     }
-
+  
+    // Apply client-side sorting according to user controls
+    const sortBy = state.podcast.sortBy || "released";
+    const sortDir = state.podcast.sortDir === "asc" ? 1 : -1;
+  
+    // released = sort by release date (try addedAt, else fall back to name/date fields)
+    // added = sort by addedAt (if present) then fallback to reverse order
+    items.sort((a, b) => {
+      try {
+        if (sortBy === "added") {
+          const ta = a?.addedAt ? Date.parse(a.addedAt) : 0;
+          const tb = b?.addedAt ? Date.parse(b.addedAt) : 0;
+          return (ta === tb) ? 0 : (ta < tb ? -1 * sortDir : 1 * sortDir);
+        } else {
+          // released: try any available release_date or publish metadata, else use addedAt
+          const ra = a?.release_date ? Date.parse(a.release_date) : (a?.addedAt ? Date.parse(a.addedAt) : 0);
+          const rb = b?.release_date ? Date.parse(b.release_date) : (b?.addedAt ? Date.parse(b.addedAt) : 0);
+          return (ra === rb) ? 0 : (ra < rb ? -1 * sortDir : 1 * sortDir);
+        }
+      } catch (e) {
+        return 0;
+      }
+    });
+  
+    // header: populate thumb/title/sub and append sort buttons into the head area
     errBox.hidden = true;
     head.hidden = false;
-
+  
     thumb.src = p.image || "https://spotify.jdge.cc/images/spotify_logo.png";
-    title.textContent = p.name || "Podcast Episodes";
-    sub.textContent = `${items.length} items`;
-
+  
+    // Title row: left = panel title, right = Released control
+    // Count row: left = count + Added control on left (per your layout)
+    title.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+        <div style="font-weight:600;">Podcast Episodes</div>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <button class="pod-sort-btn" data-sort="released" title="Sort by released" aria-label="Sort by released">🍃 ${state.podcast.sortBy === "released" ? (state.podcast.sortDir === "desc" ? "▼" : "▲") : "▲▼"}</button>
+        </div>
+      </div>
+    `;
+  
+    const countText = `${items.length} items`;
+    sub.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+        <div style="display:flex;align-items:center;gap:6px;">
+          <button class="pod-sort-btn" data-sort="added" title="Sort by added" aria-label="Sort by added">🎯 ${state.podcast.sortBy === "added" ? (state.podcast.sortDir === "desc" ? "▼" : "▲") : "▲▼"}</button>
+          <div class="podcast-count" style="margin-left:6px;">${escapeHtml(countText)}</div>
+        </div>
+        <div style="font-size:12px;color:var(--muted,#888);">Sorted: ${escapeHtml(state.podcast.sortBy)} ${escapeHtml(state.podcast.sortDir)}</div>
+      </div>
+    `;
+  
+    // render list
     list.innerHTML = items.map(renderPodcastItem).join("");
     wirePodcastInteractions(list);
     wirePodcastThumbFallbacks(list);
@@ -1041,23 +1106,23 @@
     const channel = escapeHtml((it.artists || []).join(", "));
     const dur = fmtDurationFromMs(it.durationMs || 0);
     const url = it.url || "#";
-
+  
     const isOpen = state.episodeNotes.openEpisodeId && episodeId && state.episodeNotes.openEpisodeId === episodeId;
     const hasNotes = episodeId ? episodeHasNotes(episodeId) : false;
     const noteOpacity = hasNotes ? 1 : 0.25;
-
+  
     const entry = episodeId ? state.episodeNotes.cache?.[episodeId] : null;
     const saving = !!entry?.saving;
     const err = entry?.error || null;
     const savedAt = entry?.savedAt || null;
-
+  
     const mode = isOpen ? state.episodeNotes.openMode : null;
-
+  
     const showSavedBlock = !!episodeId && isOpen && mode === "append" && hasNotes;
-
+  
     const savedBlock = showSavedBlock ? renderSavedNotesBlock(episodeId) : "";
     const editorHtml = isOpen && episodeId ? renderEpisodeNotesEditor(episodeId) : "";
-
+  
     const statusLine = isOpen && episodeId
       ? `
         <div class="epnote-status" data-epnote-status="${escapeHtml(episodeId)}">
@@ -1065,7 +1130,10 @@
         </div>
       `
       : "";
-
+  
+    // Inline icons next to duration: non-interactive placeholders for now
+    const inlineIcons = `<span class="pod-inline-icons" aria-hidden="true" style="margin-left:8px;">🍃🎯</span>`;
+  
     return `
       <li class="podcast-item" data-episode-id="${escapeHtml(episodeId)}">
         <div class="podcast-link-grid">
@@ -1082,12 +1150,15 @@
               srcset="${escapeHtml(epImg)} 1x"
             />
           </a>
-
+  
           <div class="podcast-ep-meta">
-            <div class="podcast-item-title">${name}</div>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+              <div class="podcast-item-title">${name}</div>
+              <div class="podcast-item-duration" style="white-space:nowrap;">${escapeHtml(dur)} ${inlineIcons}</div>
+            </div>
             <div class="podcast-item-sub">${channel ? channel + " • " : ""}${escapeHtml(dur)}</div>
           </div>
-
+  
           <button
             class="epnote-bubble"
             type="button"
@@ -1097,7 +1168,7 @@
             style="opacity:${noteOpacity}"
           >💭</button>
         </div>
-
+  
         ${savedBlock}
         ${statusLine}
         ${editorHtml}
@@ -1202,46 +1273,45 @@
       }
     }, true);
 
-    listEl.addEventListener("click", async (e) => {
-      const t = e.target;
-
-      const toggleId = t?.getAttribute?.("data-epnote-toggle");
-      if (toggleId) {
-        e.preventDefault();
-        await toggleEpisodeEditor(toggleId);
-        return;
-      }
-
-      const editId = t?.getAttribute?.("data-epnote-edit");
-      if (editId) {
-        e.preventDefault();
-        await openEditorForExistingNotes(editId);
-        return;
-      }
-
-      const addId = t?.getAttribute?.("data-epnote-add");
-      if (addId) {
-        e.preventDefault();
-        addEpisodeRow(addId);
-        return;
-      }
-
-      const saveId = t?.getAttribute?.("data-epnote-save");
-      if (saveId) {
-        e.preventDefault();
-        await saveEpisodeFromDom(saveId);
-        return;
-      }
-    });
-
-    listEl.addEventListener("input", (e) => {
-      const ta = e.target;
-      if (ta && ta.classList && ta.classList.contains("epnote-text")) {
-        ta.style.height = "auto";
-        ta.style.height = `${Math.min(220, ta.scrollHeight)}px`;
-      }
-    });
-  }
+  listEl.addEventListener("click", async (e) => {
+    const t = e.target;
+  
+    const sortBy = t?.getAttribute?.("data-sort");
+    if (sortBy) {
+      e.preventDefault();
+      togglePodcastSort(sortBy);
+      renderPodcastColumn();
+      return;
+    }
+  
+    const toggleId = t?.getAttribute?.("data-epnote-toggle");
+    if (toggleId) {
+      e.preventDefault();
+      await toggleEpisodeEditor(toggleId);
+      return;
+    }
+  
+    const editId = t?.getAttribute?.("data-epnote-edit");
+    if (editId) {
+      e.preventDefault();
+      await openEditorForExistingNotes(editId);
+      return;
+    }
+  
+    const addId = t?.getAttribute?.("data-epnote-add");
+    if (addId) {
+      e.preventDefault();
+      addEpisodeRow(addId);
+      return;
+    }
+  
+    const saveId = t?.getAttribute?.("data-epnote-save");
+    if (saveId) {
+      e.preventDefault();
+      await saveEpisodeFromDom(saveId);
+      return;
+    }
+  });
 
   function ensureSavedLoadedMaybe(episodeId) {
     const entry = getEpisodeCacheEntry(episodeId);
