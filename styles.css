@@ -454,7 +454,7 @@ main {
   flex: 1;
   scrollbar-width: thin;
   scrollbar-color: rgba(255,255,255,0.18) rgba(0,0,0,0.18);
-  height: var(--plListH);
+  height: var(--podListH);
 }
 
 .cards-scroll::-webkit-scrollbar { 
