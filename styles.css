@@ -33,11 +33,6 @@
     ((var(--podVisibleRows) - 1) * var(--podGap)) +
     (var(--podListPad) * 2)
   );
-  --plThumb: 56px;
-  --plRowPadY: 10px;     /* matches .card padding */
-  --plRowMinH: calc(var(--plThumb) + (var(--plRowPadY) * 2));
-  --plGap: 10px;         /* matches .cards gap */
-  --plListPad: 12px;     /* matches .cards padding */
 }
 
 *,
