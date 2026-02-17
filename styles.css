@@ -46,16 +46,20 @@
   );
 }
 
-/* Reset */
 *,
 *::before,
-*::after { box-sizing: border-box; }
+*::after { 
+  box-sizing: border-box; 
+}
 
-html, body { height: 100%; }
+html, body { 
+  height: 100%; 
+}
 
-html { background: #050708; }
+html { 
+  background: #050708; 
+}
 
-/* Continuous background layer (prevents “cutting” on mobile) */
 body::before{
   content:"";
   position: fixed;
@@ -74,17 +78,24 @@ body {
   font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
   background: transparent;
   -webkit-font-smoothing: antialiased;
-
-  /* Sticky footer layout */
   min-height: 100vh;
   display: flex;
   flex-direction: column;
 }
 
-a { color: inherit; text-decoration: none; }
-a:hover { text-decoration: underline; }
+a { 
+  color: inherit; 
+  text-decoration: none;
+}
 
-img { display: block; max-width: 100%; }
+a:hover {
+  text-decoration: underline; 
+}
+
+img { 
+  display: block; 
+  max-width: 100%;
+}
 
 /* =========================
    Header
@@ -112,9 +123,10 @@ header h1 {
   letter-spacing: 0.2px;
 }
 
-.tagline { display: none; }
+.tagline { 
+  display: none; 
+}
 
-/* Button */
 .primary-button {
   border: 1px solid rgba(29,185,84,0.30);
   background: linear-gradient(180deg, rgba(29,185,84,0.95), rgba(17,158,69,0.95));
@@ -143,12 +155,20 @@ header h1 {
   box-shadow: none;
 }
 
-.primary-button .button-label-loading { display: none; }
-.primary-button.is-loading .button-label-default { display: none; }
-.primary-button.is-loading .button-label-loading { display: inline; }
+.primary-button .button-label-loading { 
+  display: none;
+}
+
+.primary-button.is-loading .button-label-default {
+  display: none;
+}
+
+.primary-button.is-loading .button-label-loading { 
+  display: inline; 
+}
 
 /* =========================
-   Main (fills available height so footer stays at bottom)
+   Main
 ========================= */
 
 main {
@@ -156,10 +176,9 @@ main {
   margin: 0 auto;
   padding: 18px var(--pad) 28px;
   width: 100%;
-  flex: 1; /* key for sticky footer */
+  flex: 1; /
 }
 
-/* status line */
 .status {
   margin: 8px 0 16px;
   color: var(--muted);
@@ -172,17 +191,15 @@ main {
 
 .app-grid {
   display: grid;
-
-  /* ✅ CHANGE: make middle (Playlists) narrower and right (Podcast) wider */
   grid-template-columns: 340px minmax(320px, 1fr) 420px;
-
   gap: 18px;
   align-items: start;
 }
 
-.col { min-width: 0; }
+.col { 
+  min-width: 0; 
+}
 
-/* Panels */
 .panel {
   border-radius: var(--radius-lg);
   border: 1px solid var(--stroke);
@@ -206,7 +223,6 @@ main {
   color: var(--muted);
 }
 
-/* Make bodies flex-safe for nested scrolling */
 .panel-body {
   padding: 14px 14px 16px;
   min-height: 0;
@@ -216,8 +232,6 @@ main {
   display: flex;
   flex-direction: column;
   gap: 12px;
-
-  /* Desktop “lock to viewport” feel */
   max-height: var(--colMaxH);
   min-height: 0;
 }
@@ -441,31 +455,37 @@ main {
   min-height: 0;
 }
 
-.cards-compact { padding: 0; }
+.cards-compact { 
+  padding: 0; 
+}
 
 .cards-scroll {
   overflow: auto;
   min-height: 0;
   flex: 1;
-
   scrollbar-width: thin;
   scrollbar-color: rgba(255,255,255,0.18) rgba(0,0,0,0.18);
-
-  /* ✅ Desktop: lock visible playlist rows to 9 */
   height: var(--plListH);
 }
 
-.cards-scroll::-webkit-scrollbar { width: 10px; }
+.cards-scroll::-webkit-scrollbar { 
+  width: 10px;
+}
+
 .cards-scroll::-webkit-scrollbar-track {
   background: rgba(0,0,0,0.18);
   border-left: 1px solid rgba(255,255,255,0.05);
 }
+
 .cards-scroll::-webkit-scrollbar-thumb {
   background: rgba(255,255,255,0.14);
   border: 2px solid rgba(0,0,0,0.18);
   border-radius: 999px;
 }
-.cards-scroll::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.22); }
+
+.cards-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,255,255,0.22);
+}
 
 .card {
   display: grid;
@@ -493,7 +513,10 @@ main {
   background: #000;
 }
 
-.card-meta { min-width: 0; }
+.card-meta { 
+  min-width: 0; 
+}
+
 .card-title {
   margin: 0;
   font-size: 14px;
@@ -615,7 +638,7 @@ main {
 }
 
 /* =========================
-   Sort key (leaf / target)
+   Sort key
 ========================= */
 
 .pod-sort-key {
@@ -695,7 +718,9 @@ main {
   scrollbar-color: rgba(255,255,255,0.18) rgba(0,0,0,0.18);
 }
 
-#podcastList::-webkit-scrollbar { width: 10px; }
+#podcastList::-webkit-scrollbar { 
+  width: 10px; 
+}
 
 #podcastList::-webkit-scrollbar-track {
   background: rgba(0,0,0,0.18);
@@ -708,7 +733,9 @@ main {
   border-radius: 999px;
 }
 
-#podcastList::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.22); }
+#podcastList::-webkit-scrollbar-thumb:hover { 
+  background: rgba(255,255,255,0.22); 
+}
 
 .podcast-item {
   border: 1px solid var(--stroke);
@@ -848,8 +875,6 @@ main {
   color: rgba(255,255,255,0.90);
   font-size: 13px;
   line-height: 1.35;
-
-  /* critical: wrap instead of overflow */
   white-space: normal;
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -861,7 +886,6 @@ main {
   font-size: 12px;
 }
 
-/* Editor + rows */
 .epnote-status {
   padding: 0 12px 10px;
   color: rgba(255,255,255,0.70);
@@ -1106,7 +1130,7 @@ detail-sub {
 
 footer {
   border-top: 1px solid var(--stroke);
-  margin-top: auto; /* key for sticky footer */
+  margin-top: auto;
 }
 
 .container-footer {
@@ -1134,8 +1158,13 @@ footer {
     --noteTsW: 120px;
   }
 
-  .app-grid { grid-template-columns: 1fr; }
-  .panel { border-radius: 20px; }
+  .app-grid { 
+    grid-template-columns: 1fr;
+  }
+  
+  .panel { 
+    border-radius: 20px;
+  }
   
   .container-header,
   .container-footer { padding-left: var(--pad); padding-right: var(--pad); }
@@ -1145,8 +1174,15 @@ footer {
     padding-right: var(--pad); 
   }
 
-  .primary-button { width: 100%; min-width: 0; }
-  .container-header { flex-direction: column; align-items: stretch; }
+  .primary-button { 
+    width: 100%; 
+    min-width: 0; 
+  }
+  
+  .container-header { 
+    flex-direction: column; 
+    align-items: stretch;
+  }
 
   #podcastList {
     height: auto;
@@ -1166,11 +1202,21 @@ footer {
 }
 
 @media (max-width: 420px) {
-  header h1 { font-size: 20px; }
-  .detail-head { grid-template-columns: 72px 1fr; }
-  .detail-thumb { width: 72px; height: 72px; border-radius: 16px; }
+  header h1 { 
+    font-size: 20px; 
+  }
+  
+  .detail-head { 
+    grid-template-columns: 72px 1fr; 
+  }
+  
+  .detail-thumb {
+    width: 72px;
+    height: 72px; 
+    border-radius: 16px;
+  }
 
-  .epnote-saved-line{
+  .epnote-saved-line {
     grid-template-columns: 76px 1fr;
   }
 }
