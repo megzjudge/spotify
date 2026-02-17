@@ -17,7 +17,7 @@
   --pill: 999px;
   --max: 1200px;
   --pad: 22px;
-  --colMaxH: calc(100vh - 100px);
+  --colMaxH: calc(100vh - 300px);
   --mobileListMaxH: 264px;
   --podThumb: 72px;
   --podRadius: 18px;
