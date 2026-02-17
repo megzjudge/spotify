@@ -1,50 +1,33 @@
 :root {
   --spotify-green: #1db954;
-
   --bg0: #070a0c;
   --bg1: #0b1013;
   --panel: rgba(18, 26, 30, 0.62);
   --panel-2: rgba(18, 26, 30, 0.46);
   --stroke: rgba(255,255,255,0.08);
   --stroke-2: rgba(255,255,255,0.12);
-
   --text: rgba(255,255,255,0.92);
   --muted: rgba(255,255,255,0.62);
   --muted2: rgba(255,255,255,0.46);
-
   --shadow: 0 18px 50px rgba(0,0,0,0.55);
   --shadow2: 0 8px 26px rgba(0,0,0,0.45);
-
   --radius-lg: 22px;
   --radius-md: 16px;
   --radius-sm: 12px;
   --pill: 999px;
-
   --max: 1200px;
   --pad: 22px;
-
-  /* Scroll sizing */
-  --colMaxH: calc(100vh - 170px); /* desktop: viewport minus header+spacing */
-  --mobileListMaxH: 264px;        /* ~3 items visible */
-
-  /* Podcast row sizing */
+  --colMaxH: calc(100vh - 170px);
+  --mobileListMaxH: 264px;
   --podThumb: 72px;
   --podRadius: 18px;
-
-  /* Notes UI */
   --noteRowMinH: 38px;
-
-  /* ✅ bumped from 100px -> fits 00:00:00 + padding */
-  --noteTsW: 128px; /* timestamp width */
-
-  /* Podcast visible rows */
-  --podVisibleRows: 9; /* ✅ was 8 */
+  --noteTsW: 128px;
+  --podVisibleRows: 9;
   --podRowPadY: 12px;
-  --podRowMinH: calc(var(--podThumb) + (var(--podRowPadY) * 2)); /* cannot collapse */
+  --podRowMinH: calc(var(--podThumb) + (var(--podRowPadY) * 2));
   --podGap: 10px;
   --podListPad: 12px;
-
-  /* list height = 9 rows + 8 gaps + padding top/bottom */
   --podListH: calc(
     (var(--podVisibleRows) * var(--podRowMinH)) +
     ((var(--podVisibleRows) - 1) * var(--podGap)) +
@@ -515,7 +498,11 @@ main {
   text-overflow: ellipsis;
 }
 
-.muted-small { color: var(--muted2); font-size: 13px; padding: 6px 2px; }
+.muted-small {
+  color: var(--muted2); 
+  font-size: 13px; 
+  padding: 6px 2px; 
+}
 
 /* =========================
    Podcast column
@@ -550,7 +537,9 @@ main {
   font-size: 12.5px;
 }
 
-.podcast-empty { display: none; }
+.podcast-empty { 
+  display: none;
+}
 
 .podcast-error {
   color: rgba(255,255,255,0.86);
@@ -561,23 +550,55 @@ main {
   font-size: 13px;
 }
 
-/* Podcast header controls (right of title) */
 #podcastHead {
   display: flex;
-  gap: 12px;
+  gap: 8px;
   align-items: center;
-  justify-content: space-between; /* left: thumb+title; right: controls */
+  justify-content: flex-start;
+  padding: 0;
 }
 
-/* container for the controls appended to the header */
+#podcastHead .podcast-thumb {
+  flex-shrink: 0;
+  width: var(--podThumb);
+  height: var(--podThumb);
+  border-radius: var(--podRadius);
+}
+
+#podcastHead .podcast-title {
+  font-weight: 800;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 260px;
+}
+
+#podcastHead .podcast-sub {
+  margin-top: 2px;
+  color: var(--muted2);
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 #podcastHeadControls {
+  margin-left: auto;
   display: flex;
   gap: 10px;
   align-items: center;
-  justify-content: flex-end;
 }
 
-/* key label */
+#podcastHead > div:first-of-type {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-left: 6px;
+  min-width: 0;
+  flex: 0 0 auto;
+}
+
 .pod-sort-key {
   appearance: none;
   border: none;
@@ -594,6 +615,7 @@ main {
   font-size: 13px;
   opacity: 0.85;
 }
+
 .pod-sort-key[aria-pressed="true"],
 .pod-sort-key:hover {
   color: var(--spotify-green);
@@ -601,7 +623,6 @@ main {
   background: rgba(29,185,84,0.04);
 }
 
-/* arrows */
 .pod-sort-arrow {
   appearance: none;
   border: 1px solid rgba(255,255,255,0.06);
@@ -614,8 +635,17 @@ main {
   transition: background 0.08s ease, transform 0.06s ease, color 0.06s ease;
   opacity: 0.7;
 }
-.pod-sort-arrow:hover { transform: translateY(-1px); opacity: 1; }
-.pod-sort-arrow.active { color: var(--spotify-green); border-color: rgba(29,185,84,0.18); background: rgba(29,185,84,0.06); opacity: 1; }
+
+.pod-sort-arrow:hover { 
+  transform: translateY(-1px); opacity: 1; 
+}
+
+.pod-sort-arrow.active {
+  color: var(--spotify-green); 
+  border-color: rgba(29,185,84,0.18); 
+  background: rgba(29,185,84,0.06); 
+  opacity: 1;
+}
 
 /* =========================
    UL is the scroll container
@@ -625,43 +655,39 @@ main {
   list-style: none;
   margin: 0;
   padding: var(--podListPad);
-
   display: flex;
   flex-direction: column;
   gap: var(--podGap);
-
   height: var(--podListH);
   overflow-y: auto;
   overflow-x: hidden;
-
   min-height: 0;
-
   scrollbar-width: thin;
   scrollbar-color: rgba(255,255,255,0.18) rgba(0,0,0,0.18);
 }
 
 #podcastList::-webkit-scrollbar { width: 10px; }
+
 #podcastList::-webkit-scrollbar-track {
   background: rgba(0,0,0,0.18);
   border-left: 1px solid rgba(255,255,255,0.05);
 }
+
 #podcastList::-webkit-scrollbar-thumb {
   background: rgba(255,255,255,0.14);
   border: 2px solid rgba(0,0,0,0.18);
   border-radius: 999px;
 }
+
 #podcastList::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.22); }
 
 .podcast-item {
   border: 1px solid var(--stroke);
   background: rgba(0,0,0,0.18);
   border-radius: var(--radius-md);
-
-  /* ✅ allow textarea resize without clipping */
   overflow: visible;
 }
 
-/* ✅ FIX: prevent <li> collapsing to 2px in flex column */
 .podcast-item{
   display: block;
   flex: 0 0 auto;
@@ -672,18 +698,15 @@ main {
   width: 100%;
 }
 
-/* ✅ ROW: cannot collapse */
 .podcast-link-grid {
   display: grid;
   grid-template-columns: var(--podThumb) 1fr 40px;
   gap: 12px;
   align-items: center;
-
   padding: var(--podRowPadY);
   min-height: var(--podRowMinH);
 }
 
-/* ✅ HARDEN: ensure the anchor itself is a fixed square + clips correctly */
 .podcast-ep-left{
   display: block;
   width: var(--podThumb);
@@ -713,7 +736,6 @@ main {
   font-size: 13.5px;
   color: rgba(255,255,255,0.90);
   line-height: 1.2;
-
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -823,16 +845,11 @@ main {
   background: rgba(0,0,0,0.14);
 }
 
-/* ✅ NEW LAYOUT:
-   Timestamp row above the textarea.
-   We keep your existing .epnote-row name, but switch it to stacked mode.
-*/
 .epnote-row{
   display: block;
   margin-bottom: 10px;
 }
 
-/* top line (add + timestamp + save) */
 .epnote-row-top{
   display: grid;
   grid-template-columns: 28px minmax(var(--noteTsW), 1fr) 34px;
@@ -840,12 +857,10 @@ main {
   align-items: center;
 }
 
-/* textarea line */
 .epnote-row .epnote-text{
   margin-top: 10px;
 }
 
-/* Button */
 .epnote-add {
   appearance: none;
   border: 1px solid rgba(255,255,255,0.10);
@@ -877,8 +892,6 @@ main {
   padding: 6px 10px;
   font-size: 13px;
   outline: none;
-
-  /* ✅ ensure fixed-width numerals */
   font-variant-numeric: tabular-nums;
   min-width: var(--noteTsW);
 }
@@ -898,14 +911,10 @@ main {
   padding: 8px 10px;
   font-size: 13px;
   line-height: 1.35;
-
-  /* ✅ keep your original behavior */
   resize: both;
-
   max-width: 100%;
   min-width: 220px;
   overflow: auto;
-
   outline: none;
 }
 
@@ -950,7 +959,9 @@ main {
   z-index: 50;
 }
 
-.modal-backdrop.open { display: flex; }
+.modal-backdrop.open { 
+  display: flex; 
+}
 
 .modal {
   width: min(860px, 100%);
@@ -989,7 +1000,9 @@ main {
   cursor: pointer;
 }
 
-.modal-close:hover { border-color: rgba(255,255,255,0.14); }
+.modal-close:hover { 
+  border-color: rgba(255,255,255,0.14);
+}
 
 .detail-head {
   display: grid;
@@ -1020,7 +1033,6 @@ detail-sub {
   font-size: 13.5px;
 }
 
-/* track list */
 .tracklist {
   list-style: none;
   padding: 0;
@@ -1042,7 +1054,9 @@ detail-sub {
   text-decoration: none;
 }
 
-.track-name:hover { text-decoration: underline; }
+.track-name:hover { 
+  text-decoration: underline; 
+}
 
 .track-meta {
   margin-top: 4px;
@@ -1078,7 +1092,6 @@ footer {
 @media (max-width: 1100px) {
   .app-grid { grid-template-columns: 320px 1fr; }
   .col-right { grid-column: 1 / -1; }
-
   :root { --colMaxH: calc(100vh - 200px); }
 }
 
@@ -1086,41 +1099,36 @@ footer {
   :root {
     --pad: 16px;
     --colMaxH: none;
-
-    /* ✅ +33% taller lists on mobile */
     --mobileListMaxH: 352px;
-
     --podThumb: 72px;
     --podRadius: 18px;
-
-    /* ✅ keep timestamp readable on mobile */
     --noteTsW: 120px;
   }
 
   .app-grid { grid-template-columns: 1fr; }
   .panel { border-radius: 20px; }
-
+  
   .container-header,
   .container-footer { padding-left: var(--pad); padding-right: var(--pad); }
 
-  main { padding-left: var(--pad); padding-right: var(--pad); }
+  main { 
+    padding-left: var(--pad); 
+    padding-right: var(--pad); 
+  }
 
   .primary-button { width: 100%; min-width: 0; }
   .container-header { flex-direction: column; align-items: stretch; }
 
-  /* On mobile: don't force 9 rows; use a larger max-height */
   #podcastList {
     height: auto;
     max-height: var(--mobileListMaxH);
   }
 
-  /* ✅ On mobile: playlists scroll area should not lock to desktop 9-row height */
   .cards-scroll{
     height: auto;
     max-height: calc(var(--mobileListMaxH) + 120px);
   }
 
-  /* ✅ keep saved notes inside on small screens too */
   .epnote-saved{
     margin: 0 12px 12px;
   }
@@ -1133,7 +1141,6 @@ footer {
   .detail-head { grid-template-columns: 72px 1fr; }
   .detail-thumb { width: 72px; height: 72px; border-radius: 16px; }
 
-  /* ✅ narrower timestamp column in saved notes */
   .epnote-saved-line{
     grid-template-columns: 76px 1fr;
   }
