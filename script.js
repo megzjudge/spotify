@@ -242,7 +242,7 @@
         <!-- RIGHT COLUMN -->
         <aside class="panel col col-right">
           <div class="panel-header">
-            <h2 class="panel-title">Podcast Episodes</h2>
+            <h2 class="panel-title">Podcasts</h2>
           </div>
           <div class="panel-body col-scroll-body">
 
