@@ -16,7 +16,6 @@
   const PODCAST_PLAYLIST_ID = "2tHrihmpYzDbJ8rit7HtFR";
 
   const OTHERS_PLAYLIST_IDS = [
-    "71z6BdHlnfNj4DKRhuu1Fk",
     "7jYNznHoIYgJBzwT5jpoOe",
     "41PZG18MrSTagagiIaiG4X",
     "37i9dQZF1DX5mB2C8gBeUM",
