@@ -38,11 +38,6 @@
   --plRowMinH: calc(var(--plThumb) + (var(--plRowPadY) * 2));
   --plGap: 10px;         /* matches .cards gap */
   --plListPad: 12px;     /* matches .cards padding */
-  --plListH: calc(
-    (var(--plVisibleRows) * var(--plRowMinH)) +
-    ((var(--plVisibleRows) - 1) * var(--plGap)) +
-    (var(--plListPad) * 2)
-  );
 }
 
 *,
