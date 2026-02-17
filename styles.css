@@ -626,6 +626,68 @@ main {
   flex: 0 0 auto;
 }
 
+#podcastHeadControls .pod-sort-btn {
+  appearance: none;
+  border: 1px solid rgba(255,255,255,0.06);
+  background: rgba(0,0,0,0.85);
+  color: rgba(255,255,255,0.62);
+  padding: 6px 10px;
+  border-radius: 10px;
+  font-weight: 800;
+  font-size: 13px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  transition: transform .08s ease, background .12s ease, color .12s ease, border-color .12s ease;
+  box-shadow: none;
+}
+
+#podcastHeadControls .pod-sort-btn:hover {
+  background: rgba(255,255,255,0.04);
+  color: rgba(255,255,255,0.92);
+  transform: translateY(-1px);
+}
+
+#podcastHeadControls .pod-sort-btn[aria-pressed="true"],
+#podcastHeadControls .pod-sort-btn.active {
+  color: #1db954;
+  border-color: rgba(29,185,84,0.35);
+  background: rgba(29,185,84,0.10);
+}
+
+#podcastHeadControls .pod-sort-btn svg,
+#podcastHeadControls .pod-sort-btn .arrow,
+#podcastHeadControls .pod-sort-btn .arrow-char {
+  font-weight: 900;
+  font-size: 12px;
+  margin-left: 6px;
+  opacity: 0.95;
+}
+
+.pod-inline-icons {
+  color: rgba(255,255,255,0.46);
+  font-size: 13px;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  vertical-align: middle;
+  margin-left: 8px;
+}
+
+.pod-inline-icons > * {
+  pointer-events: none; user-select: none; 
+}
+
+@media (max-width: 860px) {
+  #podcastHeadControls .pod-sort-btn { 
+    padding: 6px 8px; 
+    font-size: 13px; 
+  }
+}
+
+
 /* =========================
    UL is the scroll container
 ========================= */
