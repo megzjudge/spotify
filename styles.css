@@ -628,8 +628,8 @@ main {
 
 #podcastHeadControls .pod-sort-btn {
   appearance: none;
-  border: 1px solid rgba(255,255,255,0.06);
-  background: rgba(0,0,0,0.85);
+  border: 1px solid var(--stroke);
+  background: var(--panel-2);
   color: rgba(255,255,255,0.62);
   padding: 6px 10px;
   border-radius: 10px;
