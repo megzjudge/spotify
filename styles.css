@@ -23,7 +23,7 @@
   --podRadius: 18px;
   --noteRowMinH: 38px;
   --noteTsW: 128px;
-  --podVisibleRows: 9;
+  --podVisibleRows: 8;
   --podRowPadY: 12px;
   --podRowMinH: calc(var(--podThumb) + (var(--podRowPadY) * 2));
   --podGap: 10px;
@@ -33,9 +33,7 @@
     ((var(--podVisibleRows) - 1) * var(--podGap)) +
     (var(--podListPad) * 2)
   );
-
-  /* ✅ Playlists visible rows (desktop) */
-  --plVisibleRows: 9;
+  --plVisibleRows: 8;
   --plThumb: 56px;
   --plRowPadY: 10px;     /* matches .card padding */
   --plRowMinH: calc(var(--plThumb) + (var(--plRowPadY) * 2));
