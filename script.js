@@ -25,10 +25,6 @@
     "4ByFhFwz5Z8yXVRfFoTb1w"
   ];
 
-  // IMPORTANT: this only affects the fallback per-ID fetch in the browser.
-  // Your /api/refresh is the primary source of truth for Year Summary.
-  const YEAR_SUMMARY_PLAYLIST_IDS = [];
-
   // ✅ Podcast paging config
   const PODCAST_PAGE_LIMIT = 200;
 
