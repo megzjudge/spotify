@@ -30,10 +30,6 @@ export async function onRequestPost(context) {
       "4ByFhFwz5Z8yXVRfFoTb1w"
     ];
 
-    // ❌ Removed because your token returns playlist meta 404:
-    // "37i9dQZF1DX5mB2C8gBeUM",
-    // "37i9dQZF1EQnsJ0xmvpihE"
-
     const HIDE_PLAYLIST_IDS = new Set([
       // "PUT_PLAYLIST_ID_HERE",
     ]);
