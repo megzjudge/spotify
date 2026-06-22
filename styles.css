@@ -414,10 +414,70 @@ main {
 ========================= */
 
 .pod-meta-emoji { 
-  display: inline-block; 
-  margin-right: 6px; 
-  line-height: 1; 
-  cursor: default; 
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  line-height: 1;
+  cursor: help;
+  border-radius: 8px;
+  font-size: 13px;
+  flex-shrink: 0;
+  transition: background 0.12s ease-out, transform 0.08s ease-out;
+}
+
+.pod-meta-emoji:hover,
+.pod-meta-emoji:focus-visible {
+  background: rgba(255,255,255,0.06);
+  transform: translateY(-1px);
+  outline: none;
+}
+
+.pod-meta-emoji[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(10, 14, 18, 0.96);
+  color: rgba(255,255,255,0.92);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.25;
+  white-space: nowrap;
+  box-shadow: 0 10px 24px rgba(0,0,0,0.45);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition: opacity 0.12s ease-out, transform 0.12s ease-out, visibility 0.12s ease-out;
+  z-index: 6;
+}
+
+.pod-meta-emoji:hover::after,
+.pod-meta-emoji:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.podcast-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.podcast-item-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  flex-shrink: 0;
 }
 
 .pod-meta-emojis { 
@@ -870,6 +930,9 @@ main {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  flex: 1;
+  min-width: 0;
+  text-align: left;
 }
 
 .podcast-item-sub {
@@ -879,6 +942,7 @@ main {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  text-align: left;
 }
 
 /* =========================

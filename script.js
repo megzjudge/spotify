@@ -497,6 +497,51 @@
     return parseSortDate(ep?.addedAt ?? ep?.added_at);
   }
 
+  function fmtEpisodeDisplayDate(raw, precision) {
+    if (!raw) return "Unknown";
+    const parts = String(raw).trim().split("-");
+    const y = parts[0];
+    const m = parts[1];
+    const d = parts[2];
+
+    if (precision === "year" || (!m && !d)) return y;
+    if (precision === "month" || !d) {
+      const month = Number(m);
+      if (month >= 1 && month <= 12) {
+        return `${new Date(Date.UTC(y, month - 1, 1)).toLocaleDateString(undefined, { month: "short", year: "numeric" })}`;
+      }
+      return `${y}-${m}`;
+    }
+
+    const t = Date.parse(`${y}-${m}-${d}`);
+    if (!Number.isFinite(t)) return String(raw);
+    return new Date(t).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  }
+
+  function fmtEpisodeAddedDisplayDate(ep) {
+    const ms = episodeAddedMs(ep);
+    if (!ms) return "Unknown";
+    return new Date(ms).toLocaleDateString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric"
+    });
+  }
+
+  function renderPodcastMetaIcons(it) {
+    const releaseRaw = it?.releaseDate ?? it?.release_date;
+    const releasePrecision = it?.releaseDatePrecision ?? it?.release_date_precision ?? "day";
+    const releasedLabel = fmtEpisodeDisplayDate(releaseRaw, releasePrecision);
+    const addedLabel = fmtEpisodeAddedDisplayDate(it);
+    const releasedTip = `Released: ${releasedLabel}`;
+    const addedTip = `Added: ${addedLabel}`;
+
+    return `
+      <span class="pod-meta-emoji" tabindex="0" role="img" aria-label="${escapeHtml(releasedTip)}" title="${escapeHtml(releasedTip)}" data-tip="${escapeHtml(releasedTip)}">📅</span>
+      <span class="pod-meta-emoji" tabindex="0" role="img" aria-label="${escapeHtml(addedTip)}" title="${escapeHtml(addedTip)}" data-tip="${escapeHtml(addedTip)}">➕</span>
+    `;
+  }
+
   function episodeSortValue(ep) {
     const sortBy = state.podcast.sortBy || "released";
     return sortBy === "added" ? episodeAddedMs(ep) : episodeReleaseSortKey(ep);
@@ -1130,9 +1175,8 @@
       `
       : "";
   
-    // Emojis go on the subtitle row next to the timestamp/duration
-    const emojisHtml = `<span class="pod-inline-icons" aria-hidden="true" style="margin-left:8px;">📅 ➕</span>`;
-  
+    const metaIconsHtml = renderPodcastMetaIcons(it);
+
     return `
       <li class="podcast-item" data-episode-id="${escapeHtml(episodeId)}">
         <div class="podcast-link-grid">
@@ -1149,12 +1193,12 @@
               srcset="${escapeHtml(epImg)} 1x"
             />
           </a>
-  
+
           <div class="podcast-ep-meta">
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
-              <div class="podcast-item-title" style="flex:1;min-width:0;text-align:left;">${name}</div>
-              <!-- keep notes bubble on the right -->
-              <div style="margin-left:12px;">
+            <div class="podcast-item-head">
+              <div class="podcast-item-title">${name}</div>
+              <div class="podcast-item-actions">
+                ${metaIconsHtml}
                 <button
                   class="epnote-bubble"
                   type="button"
@@ -1165,11 +1209,9 @@
                 >💭</button>
               </div>
             </div>
-  
-            <!-- subtitle row: channel, duration, emojis -->
-            <div class="podcast-item-sub" style="text-align:left;display:flex;align-items:center;gap:8px;">
-              <div style="white-space:nowrap;">${channel ? channel + " • " : ""}${escapeHtml(dur)}</div>
-              <div>${emojisHtml}</div>
+
+            <div class="podcast-item-sub">
+              ${channel ? `${channel} • ` : ""}${escapeHtml(dur)}
             </div>
           </div>
         </div>
