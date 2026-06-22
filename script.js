@@ -16,13 +16,15 @@
   const PODCAST_PLAYLIST_ID = "2tHrihmpYzDbJ8rit7HtFR";
 
   const OTHERS_PLAYLIST_IDS = [
-    "7jYNznHoIYgJBzwT5jpoOe",
     "41PZG18MrSTagagiIaiG4X",
-    "37i9dQZF1DX5mB2C8gBeUM",
-    "37i9dQZF1EQnsJ0xmvpihE",
-    "0vvXsWCC9xrXsKd4FyS8kM",
-    "37i9dQZF1DWTvEFX6xtoQd",
-    "4ByFhFwz5Z8yXVRfFoTb1w"
+    "71z6BdHlnfNj4DKRhuu1Fk",
+    "7jYNznHoIYgJBzwT5jpoOe",
+    "4OXFjf05aU4K1B17AmA7ew",
+    "37i9dQZF1DX5mB2C8gBeUM"
+  ];
+
+  const YEAR_SUMMARY_PLAYLIST_IDS = [
+    "37i9dQZEVXd4WLIGflDMQQ"
   ];
 
   // ✅ Podcast paging config
@@ -274,7 +276,7 @@
           <div class="detail-head">
             <img class="detail-thumb" id="detailThumb" alt="">
             <div style="min-width:0">
-              <h3 class="detail-title" id="detailTitle"></h3>
+              <a class="detail-title" id="detailTitle" href="#" target="_blank" rel="noopener noreferrer"></a>
               <p class="detail-sub" id="detailSub"></p>
             </div>
           </div>
@@ -559,14 +561,19 @@
   }
 
   async function loadOthersAndYearSummaryFallback() {
-    if (!state.others.length) {
-      const others = [];
-      for (const id of OTHERS_PLAYLIST_IDS) {
-        const meta = await fetchPlaylistMeta(id, "by others");
-        if (meta) others.push(meta);
+    const othersById = new Map((state.others || []).map((p) => [p.id, p]));
+    const others = [];
+
+    for (const id of OTHERS_PLAYLIST_IDS) {
+      if (othersById.has(id)) {
+        others.push(othersById.get(id));
+        continue;
       }
-      state.others = others;
+      const meta = await fetchPlaylistMeta(id, "by others");
+      if (meta) others.push(meta);
     }
+
+    state.others = others;
 
     if (!state.yearSummary.length) {
       const years = [];
@@ -1511,6 +1518,7 @@
 
     detailThumb.src = "https://spotify.jdge.cc/images/spotify_logo.png";
     detailTitle.textContent = "Loading…";
+    detailTitle.removeAttribute("href");
     detailSub.textContent = "";
     tracklist.innerHTML = "";
 
@@ -1536,6 +1544,7 @@
 
       detailThumb.src = p.image || "https://spotify.jdge.cc/images/spotify_logo.png";
       detailTitle.textContent = p.name || "Untitled playlist";
+      detailTitle.href = p.url || `https://open.spotify.com/playlist/${encodeURIComponent(playlistId)}`;
 
       const bits = [];
       if (typeof p.totalTracks === "number") bits.push(`${p.totalTracks} items`);

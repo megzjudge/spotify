@@ -18,16 +18,16 @@ export async function onRequestPost(context) {
      ***********************/
     const PODCAST_PLAYLIST_ID = "2tHrihmpYzDbJ8rit7HtFR";
 
-    // ✅ Only keep playlists you have confirmed work (your console shows these 4 are OK)
     const OTHERS_PLAYLIST_IDS = [
+      "41PZG18MrSTagagiIaiG4X",
       "71z6BdHlnfNj4DKRhuu1Fk",
       "7jYNznHoIYgJBzwT5jpoOe",
-      "41PZG18MrSTagagiIaiG4X"
-      "37i9dQZF1DX5mB2C8gBeUM",
-      "37i9dQZF1EQnsJ0xmvpihE",
-      "0vvXsWCC9xrXsKd4FyS8kM",
-      "37i9dQZF1DWTvEFX6xtoQd",
-      "4ByFhFwz5Z8yXVRfFoTb1w"
+      "4OXFjf05aU4K1B17AmA7ew",
+      "37i9dQZF1DX5mB2C8gBeUM"
+    ];
+
+    const YEAR_SUMMARY_PLAYLIST_IDS = [
+      "37i9dQZEVXd4WLIGflDMQQ"
     ];
 
     const HIDE_PLAYLIST_IDS = new Set([
@@ -42,7 +42,8 @@ export async function onRequestPost(context) {
     // Hard allowlist for “must show”
     const ALLOWLIST_IDS = new Set([
       PODCAST_PLAYLIST_ID,
-      ...OTHERS_PLAYLIST_IDS
+      ...OTHERS_PLAYLIST_IDS,
+      ...YEAR_SUMMARY_PLAYLIST_IDS
     ]);
 
     /***********************
@@ -94,6 +95,8 @@ export async function onRequestPost(context) {
 
     /***********************
      * YEAR SUMMARY DISCOVERY
+     * Spotify Wrapped / "Your Top Songs 20XX" playlists are Spotify-owned,
+     * so discover them from the raw library list before the owner filter.
      ***********************/
     function isYearSummaryPlaylist(p) {
       const name = String(p?.name || "").toLowerCase().trim();
@@ -105,7 +108,9 @@ export async function onRequestPost(context) {
         "your top songs",
         "your top artists",
         "top songs ",
-        "top artists "
+        "top artists ",
+        "on repeat",
+        "repeat rewind"
       ];
       if (strong.some(k => name.includes(k))) return true;
 
@@ -115,20 +120,75 @@ export async function onRequestPost(context) {
       return false;
     }
 
+    const yearSummaryPlaylists = [];
+    const yearSeen = new Set();
+
+    for (const id of YEAR_SUMMARY_PLAYLIST_IDS) {
+      if (yearSeen.has(id)) continue;
+
+      const fromRaw = playlistsRaw.find(p => p?.id === id);
+      let meta = null;
+
+      if (fromRaw) {
+        meta = normalizePlaylistMeta(fromRaw, myUserId);
+      } else {
+        try {
+          const p = await fetchPlaylist(accessToken, id);
+          meta = normalizePlaylistMeta(p, myUserId);
+        } catch {
+          // ignore
+        }
+      }
+
+      if (meta) {
+        yearSummaryPlaylists.push(meta);
+        yearSeen.add(id);
+      }
+    }
+
+    for (const p of playlistsRaw) {
+      if (!p?.id || yearSeen.has(p.id) || !isYearSummaryPlaylist(p)) continue;
+      yearSummaryPlaylists.push(normalizePlaylistMeta(p, myUserId));
+      yearSeen.add(p.id);
+      if (yearSummaryPlaylists.length >= 12) break;
+    }
+
+    const yearIds = new Set(yearSummaryPlaylists.map(p => p.id));
+
     const podcastPlaylist = normalized.find(p => p.id === PODCAST_PLAYLIST_ID) || null;
-    const othersPlaylists = normalized.filter(p => OTHERS_PLAYLIST_IDS.includes(p.id));
+
+    const othersPlaylists = [];
+    const othersSeen = new Set();
+
+    for (const id of OTHERS_PLAYLIST_IDS) {
+      if (othersSeen.has(id)) continue;
+
+      const fromNorm = normalized.find(p => p.id === id);
+      const fromRaw = playlistsRaw.find(p => p?.id === id);
+      let meta = fromNorm || (fromRaw ? normalizePlaylistMeta(fromRaw, myUserId) : null);
+
+      if (!meta) {
+        try {
+          const p = await fetchPlaylist(accessToken, id);
+          meta = normalizePlaylistMeta(p, myUserId);
+        } catch {
+          // ignore
+        }
+      }
+
+      if (meta) {
+        othersPlaylists.push(meta);
+        othersSeen.add(id);
+      }
+    }
 
     const candidates = normalized.filter(p =>
       p.id !== PODCAST_PLAYLIST_ID &&
-      !OTHERS_PLAYLIST_IDS.includes(p.id)
+      !OTHERS_PLAYLIST_IDS.includes(p.id) &&
+      !yearIds.has(p.id)
     );
 
-    const yearSummaryPlaylists = candidates
-      .filter(isYearSummaryPlaylist)
-      .slice(0, 12);
-
-    const yearIds = new Set(yearSummaryPlaylists.map(p => p.id));
-    const normal = candidates.filter(p => !yearIds.has(p.id));
+    const normal = candidates;
 
     /***********************
      * SECTIONS

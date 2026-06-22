@@ -18,6 +18,10 @@
   --max: 1200px;
   --pad: 22px;
   --colMaxH: calc(100vh - 250px);
+  --mainColH: calc(100dvh - var(--siteHeaderH) - var(--siteFooterH) - var(--mainPadY));
+  --siteHeaderH: 58px;
+  --siteFooterH: 72px;
+  --mainPadY: 46px;
   --mobileListMaxH: 264px;
   --podThumb: 72px;
   --podRadius: 18px;
@@ -166,6 +170,9 @@ main {
   padding: 18px var(--pad) 28px;
   width: 100%;
   flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .status {
@@ -182,7 +189,25 @@ main {
   display: grid;
   grid-template-columns: 340px minmax(320px, 1fr) 420px;
   gap: 18px;
-  align-items: start;
+  align-items: stretch;
+  flex: 1;
+  min-height: 0;
+}
+
+.col-mid.panel,
+.col-right.panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: var(--mainColH);
+}
+
+.col-mid .panel-body,
+.col-right .panel-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .col { 
@@ -221,8 +246,26 @@ main {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  max-height: var(--colMaxH);
   min-height: 0;
+  flex: 1;
+}
+
+.col-mid .col-scroll-body {
+  max-height: none;
+}
+
+.col-right .col-scroll-body {
+  max-height: none;
+}
+
+.col-mid .col-scroll-body > .subpanel-flex {
+  flex: 1;
+  min-height: 0;
+}
+
+#podcastHead,
+.podcast-error {
+  flex-shrink: 0;
 }
 
 /* =========================
@@ -454,7 +497,6 @@ main {
   flex: 1;
   scrollbar-width: thin;
   scrollbar-color: rgba(255,255,255,0.18) rgba(0,0,0,0.18);
-  height: var(--podListH);
 }
 
 .cards-scroll::-webkit-scrollbar { 
@@ -699,10 +741,10 @@ main {
   display: flex;
   flex-direction: column;
   gap: var(--podGap);
-  height: var(--podListH);
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  min-height: 0;
   scrollbar-width: thin;
   scrollbar-color: rgba(255,255,255,0.18) rgba(0,0,0,0.18);
 }
@@ -1067,6 +1109,13 @@ main {
   font-size: 20px;
   font-weight: 850;
   line-height: 1.15;
+  color: inherit;
+  text-decoration: none;
+}
+
+a.detail-title:hover {
+  text-decoration: underline;
+  color: var(--spotify-green);
 }
 
 detail-sub {
@@ -1125,6 +1174,16 @@ footer {
 .container-footer {
   color: var(--muted2);
   font-size: 12.5px;
+  flex-wrap: wrap;
+}
+
+.footer-repo a {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.footer-repo a:hover {
+  color: var(--spotify-green);
 }
 
 /* =========================
@@ -1182,6 +1241,16 @@ footer {
   .container-header { 
     flex-direction: column; 
     align-items: stretch;
+  }
+
+  .col-mid.panel,
+  .col-right.panel {
+    max-height: none;
+  }
+
+  .col-mid .col-scroll-body,
+  .col-right .col-scroll-body {
+    max-height: var(--colMaxH);
   }
 
   #podcastList {
