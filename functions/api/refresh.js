@@ -22,12 +22,7 @@ export async function onRequestPost(context) {
       "41PZG18MrSTagagiIaiG4X",
       "71z6BdHlnfNj4DKRhuu1Fk",
       "7jYNznHoIYgJBzwT5jpoOe",
-      "4OXFjf05aU4K1B17AmA7ew",
-      "37i9dQZF1DX5mB2C8gBeUM"
-    ];
-
-    const YEAR_SUMMARY_PLAYLIST_IDS = [
-      "37i9dQZEVXd4WLIGflDMQQ"
+      "4OXFjf05aU4K1B17AmA7ew"
     ];
 
     const HIDE_PLAYLIST_IDS = new Set([
@@ -42,8 +37,7 @@ export async function onRequestPost(context) {
     // Hard allowlist for “must show”
     const ALLOWLIST_IDS = new Set([
       PODCAST_PLAYLIST_ID,
-      ...OTHERS_PLAYLIST_IDS,
-      ...YEAR_SUMMARY_PLAYLIST_IDS
+      ...OTHERS_PLAYLIST_IDS
     ]);
 
     /***********************
@@ -93,68 +87,6 @@ export async function onRequestPost(context) {
 
     const normalized = filtered.map(p => normalizePlaylistMeta(p, myUserId));
 
-    /***********************
-     * YEAR SUMMARY DISCOVERY
-     * Spotify Wrapped / "Your Top Songs 20XX" playlists are Spotify-owned,
-     * so discover them from the raw library list before the owner filter.
-     ***********************/
-    function isYearSummaryPlaylist(p) {
-      const name = String(p?.name || "").toLowerCase().trim();
-      if (!name) return false;
-
-      const strong = [
-        "wrapped",
-        "year in review",
-        "your top songs",
-        "your top artists",
-        "top songs ",
-        "top artists ",
-        "on repeat",
-        "repeat rewind"
-      ];
-      if (strong.some(k => name.includes(k))) return true;
-
-      const yearMatch = name.match(/\b(2020|2021|2022|2023|2024|2025|2026|2027|2028|2029|2030)\b/);
-      if (yearMatch && (name.includes("top") || name.includes("wrapped") || name.includes("year"))) return true;
-
-      return false;
-    }
-
-    const yearSummaryPlaylists = [];
-    const yearSeen = new Set();
-
-    for (const id of YEAR_SUMMARY_PLAYLIST_IDS) {
-      if (yearSeen.has(id)) continue;
-
-      const fromRaw = playlistsRaw.find(p => p?.id === id);
-      let meta = null;
-
-      if (fromRaw) {
-        meta = normalizePlaylistMeta(fromRaw, myUserId);
-      } else {
-        try {
-          const p = await fetchPlaylist(accessToken, id);
-          meta = normalizePlaylistMeta(p, myUserId);
-        } catch {
-          // ignore
-        }
-      }
-
-      if (meta) {
-        yearSummaryPlaylists.push(meta);
-        yearSeen.add(id);
-      }
-    }
-
-    for (const p of playlistsRaw) {
-      if (!p?.id || yearSeen.has(p.id) || !isYearSummaryPlaylist(p)) continue;
-      yearSummaryPlaylists.push(normalizePlaylistMeta(p, myUserId));
-      yearSeen.add(p.id);
-      if (yearSummaryPlaylists.length >= 12) break;
-    }
-
-    const yearIds = new Set(yearSummaryPlaylists.map(p => p.id));
-
     const podcastPlaylist = normalized.find(p => p.id === PODCAST_PLAYLIST_ID) || null;
 
     const othersPlaylists = [];
@@ -184,8 +116,7 @@ export async function onRequestPost(context) {
 
     const candidates = normalized.filter(p =>
       p.id !== PODCAST_PLAYLIST_ID &&
-      !OTHERS_PLAYLIST_IDS.includes(p.id) &&
-      !yearIds.has(p.id)
+      !OTHERS_PLAYLIST_IDS.includes(p.id)
     );
 
     const normal = candidates;
@@ -244,7 +175,6 @@ export async function onRequestPost(context) {
 
       sections: { dailyMix, top, other },
       othersPlaylists,
-      yearSummaryPlaylists,
       podcastPlaylist
     };
 
@@ -252,7 +182,6 @@ export async function onRequestPost(context) {
       resp.debug = {
         fetchedPlaylists: playlistsRaw.length,
         filteredPlaylists: normalized.length,
-        yearSummaryMatched: yearSummaryPlaylists.map(p => ({ id: p.id, name: p.name })),
         hideIdsCount: HIDE_PLAYLIST_IDS.size,
         allowlist: Array.from(ALLOWLIST_IDS)
       };

@@ -19,12 +19,7 @@
     "41PZG18MrSTagagiIaiG4X",
     "71z6BdHlnfNj4DKRhuu1Fk",
     "7jYNznHoIYgJBzwT5jpoOe",
-    "4OXFjf05aU4K1B17AmA7ew",
-    "37i9dQZF1DX5mB2C8gBeUM"
-  ];
-
-  const YEAR_SUMMARY_PLAYLIST_IDS = [
-    "37i9dQZEVXd4WLIGflDMQQ"
+    "4OXFjf05aU4K1B17AmA7ew"
   ];
 
   // ✅ Podcast paging config
@@ -49,7 +44,6 @@
     snapshot: null,
     filter: "all",
     others: [],
-    yearSummary: [],
     podcast: {
       tried: false,
       error: null,
@@ -213,15 +207,6 @@
             </div>
           </section>
 
-          <section class="panel" style="margin-top:16px;">
-            <div class="panel-header">
-              <h2 class="panel-title">Year Summary Playlist</h2>
-            </div>
-            <div class="panel-body">
-              <div class="cards cards-compact" id="yearSummaryCards"></div>
-            </div>
-          </section>
-
         </div>
 
         <!-- MIDDLE COLUMN -->
@@ -330,14 +315,13 @@
   /***********************
    * Statistics
    ***********************/
-  function computeSongCountFromSnapshot({ includeOthers = false, includeYearSummary = false } = {}) {
+  function computeSongCountFromSnapshot({ includeOthers = false } = {}) {
     const sections = state.snapshot?.sections || {};
     const getList = (k) => (Array.isArray(sections?.[k]) ? sections[k] : []);
     const core = [...getList("dailyMix"), ...getList("top"), ...getList("other")];
     const sumTracks = (arr) => arr.reduce((acc, p) => acc + (Number(p?.totalTracks) || 0), 0);
     let sum = sumTracks(core);
     if (includeOthers) sum += sumTracks(state.others || []);
-    if (includeYearSummary) sum += sumTracks(state.yearSummary || []);
     return sum;
   }
 
@@ -371,7 +355,7 @@
     const totals = state.snapshot?.totals || {};
     const playlists = totals.playlists ?? "–";
 
-    const computedSongs = computeSongCountFromSnapshot({ includeOthers: false, includeYearSummary: false });
+    const computedSongs = computeSongCountFromSnapshot({ includeOthers: false });
     const songs = computedSongs > 0 ? computedSongs : totals.songs ?? "–";
 
     const songHours = getSongHoursDisplay(totals);
@@ -531,7 +515,7 @@
   }
 
   /***********************
-   * Manual panels (Others + Year Summary)
+   * Manual panels (Others)
    ***********************/
   async function fetchPlaylistMeta(playlistId, ownerLabelFallback) {
     const res = await fetch(API_PLAYLIST, {
@@ -560,7 +544,7 @@
     };
   }
 
-  async function loadOthersAndYearSummaryFallback() {
+  async function loadOthersFallback() {
     const othersById = new Map((state.others || []).map((p) => [p.id, p]));
     const others = [];
 
@@ -574,15 +558,6 @@
     }
 
     state.others = others;
-
-    if (!state.yearSummary.length) {
-      const years = [];
-      for (const id of YEAR_SUMMARY_PLAYLIST_IDS) {
-        const meta = await fetchPlaylistMeta(id, "Spotify");
-        if (meta) years.push(meta);
-      }
-      state.yearSummary = years;
-    }
   }
 
   function renderOthers() {
@@ -592,17 +567,6 @@
     el.innerHTML = state.others.length
       ? state.others.map(cardHtml).join("")
       : `<div class="muted-small">No “others” playlists added.</div>`;
-
-    wireCardClicks(el);
-  }
-
-  function renderYearSummary() {
-    const el = document.getElementById("yearSummaryCards");
-    if (!el) return;
-
-    el.innerHTML = state.yearSummary.length
-      ? state.yearSummary.map(cardHtml).join("")
-      : `<div class="muted-small">No year summary playlist added yet.</div>`;
 
     wireCardClicks(el);
   }
@@ -1610,17 +1574,13 @@
         ? data.othersPlaylists.map((p) => ({ ...p, ownerLabel: p.ownerLabel || "by others" }))
         : [];
 
-      state.yearSummary = Array.isArray(data?.yearSummaryPlaylists)
-        ? data.yearSummaryPlaylists.map((p) => ({ ...p, ownerLabel: p.ownerLabel || "Spotify" }))
-        : [];
-
       state.episodeNotes.openEpisodeId = null;
       state.episodeNotes.openMode = null;
       state.episodeNotes.episodesWithNotes = new Set();
 
       // Run non-critical fetches in parallel but guarded so they can't hang forever
       const tasks = [
-        (async () => { try { await loadOthersAndYearSummaryFallback(); } catch(e){ console.warn('loadOthers failed', e); } })(),
+        (async () => { try { await loadOthersFallback(); } catch(e){ console.warn('loadOthers failed', e); } })(),
         (async () => { try { await loadPodcastColumn(); } catch(e){ console.warn('loadPodcastColumn failed', e); state.podcast.error = state.podcast.error || String(e?.message || e); } })(),
         (async () => { try { await loadEpisodeNotesSummary(); } catch(e){ console.warn('loadEpisodeNotesSummary failed', e); } })()
       ];
@@ -1634,7 +1594,6 @@
       renderFilterPills();
       renderPlaylists();
       renderOthers();
-      renderYearSummary();
       renderPodcastColumn();
 
       setStatus("");

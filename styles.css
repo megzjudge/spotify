@@ -1177,13 +1177,24 @@ footer {
   flex-wrap: wrap;
 }
 
-.footer-repo a {
+.footer-left {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+}
+
+.footer-left a {
   color: var(--muted);
   font-weight: 600;
 }
 
-.footer-repo a:hover {
+.footer-left a:hover {
   color: var(--spotify-green);
+}
+
+.footer-copy {
+  margin: 0;
+  white-space: nowrap;
 }
 
 /* =========================
