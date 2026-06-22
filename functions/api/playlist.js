@@ -43,22 +43,35 @@ export async function onRequestPost({ env, request }) {
 
     let normalizedItems = items.map(normalizeItem).filter(Boolean);
 
-    // ENRICH: episodes sometimes miss images; lookup in batches
-    const missingEpIds = normalizedItems
-      .filter((x) => x.type === "episode" && !x.image && x.id)
-      .map((x) => x.id);
+    // ENRICH: playlist /tracks often returns simplified episodes without release_date.
+    // Batch-fetch full episode objects for reliable sort metadata (and images).
+    const episodeIds = [
+      ...new Set(
+        normalizedItems
+          .filter((x) => x.type === "episode" && x.id)
+          .map((x) => x.id)
+      )
+    ];
 
-    if (missingEpIds.length) {
-      const eps = await fetchEpisodesByIds(token, missingEpIds);
-
-      const idToImg = new Map(
-        (eps || []).map((ep) => [ep?.id, pickFirstImageUrl(ep?.images) || null])
-      );
+    if (episodeIds.length) {
+      const eps = await fetchEpisodesByIds(token, episodeIds);
+      const idToEp = new Map((eps || []).filter(Boolean).map((ep) => [ep.id, ep]));
 
       normalizedItems = normalizedItems.map((x) => {
-        if (x.type !== "episode" || x.image || !x.id) return x;
-        const img = idToImg.get(x.id) || null;
-        return img ? { ...x, image: img } : x;
+        if (x.type !== "episode" || !x.id) return x;
+        const full = idToEp.get(x.id);
+        if (!full) return x;
+
+        return {
+          ...x,
+          releaseDate: full.release_date || x.releaseDate || null,
+          releaseDatePrecision: full.release_date_precision || x.releaseDatePrecision || null,
+          image:
+            x.image ||
+            pickFirstImageUrl(full.images) ||
+            pickFirstImageUrl(full.show?.images) ||
+            null
+        };
       });
     }
 
@@ -408,6 +421,7 @@ function normalizeItem(it) {
       durationMs,
       addedAt: it.added_at || null,
       releaseDate: obj.release_date || null,
+      releaseDatePrecision: obj.release_date_precision || null,
       image: episodeImage
     };
   }

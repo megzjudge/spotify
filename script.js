@@ -470,12 +470,36 @@
     return Number.isFinite(t) ? t : null;
   }
 
-  function episodeReleaseMs(ep) {
-    return parseSortDate(ep?.releaseDate ?? ep?.release_date);
+  function episodeReleaseSortKey(ep) {
+    const raw = ep?.releaseDate ?? ep?.release_date;
+    if (!raw) return null;
+
+    const precision = ep?.releaseDatePrecision ?? ep?.release_date_precision ?? "day";
+    const parts = String(raw).trim().split("-");
+    const y = Number(parts[0]) || 0;
+    let m = Number(parts[1]) || 0;
+    let d = Number(parts[2]) || 0;
+
+    if (precision === "year") {
+      m = 1;
+      d = 1;
+    } else if (precision === "month") {
+      d = 1;
+    } else {
+      if (!m) m = 1;
+      if (!d) d = 1;
+    }
+
+    return (y * 10000) + (m * 100) + d;
   }
 
   function episodeAddedMs(ep) {
     return parseSortDate(ep?.addedAt ?? ep?.added_at);
+  }
+
+  function episodeSortValue(ep) {
+    const sortBy = state.podcast.sortBy || "released";
+    return sortBy === "added" ? episodeAddedMs(ep) : episodeReleaseSortKey(ep);
   }
 
   function setPodcastSort(by, dir) {
@@ -485,15 +509,13 @@
   }
 
   function comparePodcastEpisodes(a, b) {
-    const sortBy = state.podcast.sortBy || "released";
     const sortDir = state.podcast.sortDir === "asc" ? 1 : -1;
-    const pick = sortBy === "added" ? episodeAddedMs : episodeReleaseMs;
-    const ta = pick(a);
-    const tb = pick(b);
-    const aMs = ta ?? (sortDir === 1 ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY);
-    const bMs = tb ?? (sortDir === 1 ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY);
-    if (aMs === bMs) return 0;
-    return aMs < bMs ? -1 * sortDir : 1 * sortDir;
+    const ta = episodeSortValue(a);
+    const tb = episodeSortValue(b);
+    const aVal = ta ?? (sortDir === 1 ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY);
+    const bVal = tb ?? (sortDir === 1 ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY);
+    if (aVal === bVal) return 0;
+    return aVal < bVal ? -1 * sortDir : 1 * sortDir;
   }
 
   function podcastSortDirBtnClass(field, dir) {
