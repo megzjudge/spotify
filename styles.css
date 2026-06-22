@@ -702,10 +702,47 @@ main {
 #podcastHeadControls .pod-sort-btn svg,
 #podcastHeadControls .pod-sort-btn .arrow,
 #podcastHeadControls .pod-sort-btn .arrow-char {
-  font-weight: 900;
-  font-size: 12px;
-  margin-left: 6px;
-  opacity: 0.95;
+ font-weight: 900;
+ font-size: 12px;
+ margin-left: 6px;
+ opacity: 0.95;
+}
+
+.pod-sort-groups {
+ display: flex;
+ align-items: center;
+ gap: 10px;
+}
+
+.pod-sort-group {
+ display: inline-flex;
+ align-items: center;
+ gap: 4px;
+ border: 1px solid var(--stroke);
+ background: var(--panel-2);
+ border-radius: 10px;
+ padding: 4px 6px;
+}
+
+.pod-sort-label {
+ font-size: 14px;
+ line-height: 1;
+ margin-right: 2px;
+ user-select: none;
+}
+
+#podcastHeadControls .pod-sort-dir {
+ padding: 4px 7px;
+ min-width: 28px;
+ justify-content: center;
+ border: 1px solid transparent;
+ background: transparent;
+ border-radius: 8px;
+}
+
+#podcastHeadControls .pod-sort-dir:hover {
+ background: rgba(255,255,255,0.04);
+ border-color: rgba(255,255,255,0.08);
 }
 
 .pod-inline-icons {

@@ -407,6 +407,7 @@ function normalizeItem(it) {
       url,
       durationMs,
       addedAt: it.added_at || null,
+      releaseDate: obj.release_date || null,
       image: episodeImage
     };
   }

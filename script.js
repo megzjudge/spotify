@@ -464,16 +464,71 @@
     renderPlaylists();
   }
 
-  function togglePodcastSort(by) {
+  function parseSortDate(raw) {
+    if (!raw) return null;
+    const t = Date.parse(raw);
+    return Number.isFinite(t) ? t : null;
+  }
+
+  function episodeReleaseMs(ep) {
+    return parseSortDate(ep?.releaseDate ?? ep?.release_date);
+  }
+
+  function episodeAddedMs(ep) {
+    return parseSortDate(ep?.addedAt ?? ep?.added_at);
+  }
+
+  function setPodcastSort(by, dir) {
     if (!by) return;
-    const cur = state.podcast.sortBy;
-    if (cur === by) {
-      // toggle direction
-      state.podcast.sortDir = state.podcast.sortDir === "desc" ? "asc" : "desc";
-    } else {
-      state.podcast.sortBy = by;
-      state.podcast.sortDir = "desc";
-    }
+    state.podcast.sortBy = by === "added" ? "added" : "released";
+    state.podcast.sortDir = dir === "asc" ? "asc" : "desc";
+  }
+
+  function comparePodcastEpisodes(a, b) {
+    const sortBy = state.podcast.sortBy || "released";
+    const sortDir = state.podcast.sortDir === "asc" ? 1 : -1;
+    const pick = sortBy === "added" ? episodeAddedMs : episodeReleaseMs;
+    const ta = pick(a);
+    const tb = pick(b);
+    const aMs = ta ?? (sortDir === 1 ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY);
+    const bMs = tb ?? (sortDir === 1 ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY);
+    if (aMs === bMs) return 0;
+    return aMs < bMs ? -1 * sortDir : 1 * sortDir;
+  }
+
+  function podcastSortDirBtnClass(field, dir) {
+    const active = state.podcast.sortBy === field && state.podcast.sortDir === dir;
+    return `pod-sort-btn pod-sort-dir${active ? " active" : ""}`;
+  }
+
+  function renderPodcastSortControls() {
+    const controlsEl = document.getElementById("podcastHeadControls");
+    if (!controlsEl) return;
+
+    controlsEl.innerHTML = `
+      <div class="pod-sort-groups">
+        <div class="pod-sort-group" title="Sort by release date">
+          <span class="pod-sort-label" aria-hidden="true">📅</span>
+          <button type="button" class="${podcastSortDirBtnClass("released", "asc")}" data-sort="released" data-dir="asc" aria-label="Release date, oldest first">▲</button>
+          <button type="button" class="${podcastSortDirBtnClass("released", "desc")}" data-sort="released" data-dir="desc" aria-label="Release date, newest first">▼</button>
+        </div>
+        <div class="pod-sort-group" title="Sort by date added to playlist">
+          <span class="pod-sort-label" aria-hidden="true">➕</span>
+          <button type="button" class="${podcastSortDirBtnClass("added", "asc")}" data-sort="added" data-dir="asc" aria-label="Date added, oldest first">▲</button>
+          <button type="button" class="${podcastSortDirBtnClass("added", "desc")}" data-sort="added" data-dir="desc" aria-label="Date added, newest first">▼</button>
+        </div>
+      </div>
+    `;
+
+    if (controlsEl.__sortBound) return;
+    controlsEl.__sortBound = true;
+    controlsEl.addEventListener("click", (e) => {
+      const btn = e.target?.closest?.("button[data-sort][data-dir]");
+      if (!btn) return;
+      e.preventDefault();
+      setPodcastSort(btn.getAttribute("data-sort"), btn.getAttribute("data-dir"));
+      renderPodcastColumn();
+    });
   }
 
   function renderFilterPills() {
@@ -954,17 +1009,6 @@
         offset = nextOffset;
       }
 
-      const anyAddedAt = allEpisodes.some((x) => !!x?.addedAt);
-      if (anyAddedAt) {
-        allEpisodes.sort((a, b) => {
-          const ta = a?.addedAt ? Date.parse(a.addedAt) : 0;
-          const tb = b?.addedAt ? Date.parse(b.addedAt) : 0;
-          return tb - ta;
-        });
-      } else {
-        allEpisodes.reverse();
-      }
-
       state.podcast.items = allEpisodes;
     } catch (e) {
       state.podcast.error = String(e?.message || e);
@@ -1012,24 +1056,7 @@
       return;
     }
   
-    // Sort client-side according to state.podcast.sortBy / sortDir
-    const sortBy = state.podcast.sortBy || "released";
-    const sortDir = state.podcast.sortDir === "asc" ? 1 : -1;
-    items.sort((a, b) => {
-      try {
-        if (sortBy === "added") {
-          const ta = a?.addedAt ? Date.parse(a.addedAt) : 0;
-          const tb = b?.addedAt ? Date.parse(b.addedAt) : 0;
-          return (ta === tb) ? 0 : (ta < tb ? -1 * sortDir : 1 * sortDir);
-        } else {
-          const ra = a?.release_date ? Date.parse(a.release_date) : (a?.addedAt ? Date.parse(a.addedAt) : 0);
-          const rb = b?.release_date ? Date.parse(b.release_date) : (b?.addedAt ? Date.parse(b.addedAt) : 0);
-          return (ra === rb) ? 0 : (ra < rb ? -1 * sortDir : 1 * sortDir);
-        }
-      } catch (e) {
-        return 0;
-      }
-    });
+    items.sort(comparePodcastEpisodes);
   
     errBox.hidden = true;
     head.hidden = false;
@@ -1041,30 +1068,7 @@
     const countText = `${items.length} items`;
     sub.innerHTML = `<div class="podcast-count" style="font-weight:600;">${escapeHtml(countText)}</div>`;
 
-    // Controls (kept on the right column) — we render buttons here so the header layout is tidy.
-    const controlsEl = document.getElementById("podcastHeadControls");
-    if (controlsEl) {
-      // two small buttons: released (leaf) and added (target)
-      const releasedArrow = state.podcast.sortBy === "released" ? (state.podcast.sortDir === "desc" ? "▼" : "▲") : "▲▼";
-      const addedArrow = state.podcast.sortBy === "added" ? (state.podcast.sortDir === "desc" ? "▼" : "▲") : "▲▼";
-
-      controlsEl.innerHTML = `
-        <div style="display:flex;align-items:center;gap:8px;">
-          <button class="pod-sort-btn" data-sort="released" title="Sort by released" aria-label="Sort by released">🍃 ${releasedArrow}</button>
-          <button class="pod-sort-btn" data-sort="added" title="Sort by added" aria-label="Sort by added">🎯 ${addedArrow}</button>
-        </div>
-      `;
-
-      // wire clicks on the controls (keeps sorting logic in togglePodcastSort)
-      controlsEl.querySelectorAll("button[data-sort]").forEach((btn) => {
-        btn.addEventListener("click", (e) => {
-          const by = btn.getAttribute("data-sort");
-          if (!by) return;
-          togglePodcastSort(by);
-          renderPodcastColumn();
-        });
-      });
-    }
+    renderPodcastSortControls();
   
     // Render list items
     list.innerHTML = items.map(renderPodcastItem).join("");
@@ -1105,7 +1109,7 @@
       : "";
   
     // Emojis go on the subtitle row next to the timestamp/duration
-    const emojisHtml = `<span class="pod-inline-icons" aria-hidden="true" style="margin-left:8px;">🍃 🎯</span>`;
+    const emojisHtml = `<span class="pod-inline-icons" aria-hidden="true" style="margin-left:8px;">📅 ➕</span>`;
   
     return `
       <li class="podcast-item" data-episode-id="${escapeHtml(episodeId)}">
@@ -1254,15 +1258,7 @@
 
     listEl.addEventListener("click", async (e) => {
       const t = e.target;
-    
-      const sortBy = t?.getAttribute?.("data-sort");
-      if (sortBy) {
-        e.preventDefault();
-        togglePodcastSort(sortBy);
-        renderPodcastColumn();
-        return;
-      }
-    
+
       const toggleId = t?.getAttribute?.("data-epnote-toggle");
       if (toggleId) {
         e.preventDefault();
