@@ -625,6 +625,7 @@ main {
   align-items: center;
   justify-content: flex-start;
   padding: 0;
+  min-width: 0;
 }
 
 #podcastHead .podcast-thumb {
@@ -640,7 +641,7 @@ main {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 260px;
+  max-width: 100%;
 }
 
 #podcastHead .podcast-sub {
@@ -655,8 +656,11 @@ main {
 #podcastHeadControls {
   margin-left: auto;
   display: flex;
-  gap: 10px;
+  gap: 6px;
   align-items: center;
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 100%;
 }
 
 #podcastHead > div:first-of-type {
@@ -665,7 +669,7 @@ main {
   gap: 2px;
   margin-left: 6px;
   min-width: 0;
-  flex: 0 0 auto;
+  flex: 1 1 auto;
 }
 
 #podcastHeadControls .pod-sort-btn {
@@ -711,33 +715,42 @@ main {
 .pod-sort-groups {
  display: flex;
  align-items: center;
- gap: 10px;
+ gap: 6px;
+ flex-wrap: nowrap;
+ min-width: 0;
+ max-width: 100%;
 }
 
 .pod-sort-group {
  display: inline-flex;
  align-items: center;
- gap: 4px;
+ gap: 2px;
  border: 1px solid var(--stroke);
  background: var(--panel-2);
- border-radius: 10px;
- padding: 4px 6px;
+ border-radius: 8px;
+ padding: 2px 4px;
+ flex-shrink: 1;
+ min-width: 0;
 }
 
 .pod-sort-label {
- font-size: 14px;
+ font-size: 12px;
  line-height: 1;
- margin-right: 2px;
+ margin-right: 1px;
  user-select: none;
+ flex-shrink: 0;
 }
 
 #podcastHeadControls .pod-sort-dir {
- padding: 4px 7px;
- min-width: 28px;
+ padding: 2px 5px;
+ min-width: 22px;
+ font-size: 11px;
+ line-height: 1;
  justify-content: center;
  border: 1px solid transparent;
  background: transparent;
- border-radius: 8px;
+ border-radius: 6px;
+ flex-shrink: 0;
 }
 
 #podcastHeadControls .pod-sort-dir:hover {
@@ -757,13 +770,6 @@ main {
 
 .pod-inline-icons > * {
   pointer-events: none; user-select: none; 
-}
-
-@media (max-width: 860px) {
-  #podcastHeadControls .pod-sort-btn { 
-    padding: 6px 8px; 
-    font-size: 13px; 
-  }
 }
 
 
@@ -1257,65 +1263,111 @@ footer {
     --pad: 16px;
     --colMaxH: none;
     --mobileListMaxH: 352px;
-    --podThumb: 72px;
-    --podRadius: 18px;
+    --podThumb: 56px;
+    --podRadius: 14px;
     --noteTsW: 120px;
   }
 
-  .app-grid { 
+  html, body {
+    height: auto;
+    min-height: 100%;
+  }
+
+  main {
+    flex: none;
+    min-height: auto;
+    display: block;
+    overflow: visible;
+    padding-left: var(--pad);
+    padding-right: var(--pad);
+  }
+
+  .app-grid {
     grid-template-columns: 1fr;
-  }
-  
-  .panel { 
-    border-radius: 20px;
-  }
-  
-  .container-header,
-  .container-footer { 
-    padding-left: var(--pad); 
-    padding-right: var(--pad); 
+    flex: none;
+    min-height: auto;
+    align-items: start;
+    gap: 16px;
   }
 
-  main { 
-    padding-left: var(--pad); 
-    padding-right: var(--pad); 
-  }
-
-  .primary-button { 
-    width: 100%; 
-    min-width: 0; 
-  }
-  
-  .container-header { 
-    flex-direction: column; 
-    align-items: stretch;
+  .col-left,
+  .col-mid,
+  .col-right {
+    min-width: 0;
+    width: 100%;
   }
 
   .col-mid.panel,
   .col-right.panel {
     max-height: none;
+    min-height: auto;
+    height: auto;
   }
 
-  .col-mid .col-scroll-body,
-  .col-right .col-scroll-body {
-    max-height: var(--colMaxH);
+  .col-mid .panel-body,
+  .col-right .panel-body,
+  .col-scroll-body,
+  .col-mid .col-scroll-body > .subpanel-flex {
+    flex: none;
+    min-height: auto;
+    max-height: none;
+    height: auto;
+  }
+
+  .panel {
+    border-radius: 20px;
+    overflow: visible;
+  }
+
+  .container-header,
+  .container-footer {
+    padding-left: var(--pad);
+    padding-right: var(--pad);
+  }
+
+  .primary-button {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .container-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  #podcastHead {
+    flex-wrap: wrap;
+    row-gap: 10px;
+  }
+
+  #podcastHeadControls {
+    margin-left: 0;
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  #podcastHeadControls .pod-sort-btn {
+    padding: 2px 5px;
+    font-size: 11px;
   }
 
   #podcastList {
+    flex: none;
     height: auto;
     max-height: var(--mobileListMaxH);
+    overflow-y: auto;
   }
 
-  .cards-scroll{
+  .cards-scroll {
+    flex: none;
     height: auto;
-    max-height: calc(var(--mobileListMaxH) + 120px);
+    max-height: var(--mobileListMaxH);
+    overflow-y: auto;
   }
 
-  .epnote-saved{
+  .epnote-saved {
     margin: 0 12px 12px;
   }
-
-  body { min-height: 100%; }
 }
 
 @media (max-width: 420px) {
