@@ -50,7 +50,7 @@
       playlist: null,
       items: [],
       // sorting for podcast panel
-      sortBy: "released", // "released" | "added"
+      sortBy: "added", // "released" | "added"
       sortDir: "desc" // "asc" | "desc"
     },
 
