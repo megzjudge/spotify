@@ -537,8 +537,8 @@
     const addedTip = `Added: ${addedLabel}`;
 
     return `
-      <span class="pod-meta-emoji" tabindex="0" role="img" aria-label="${escapeHtml(releasedTip)}" title="${escapeHtml(releasedTip)}" data-tip="${escapeHtml(releasedTip)}">📅</span>
       <span class="pod-meta-emoji" tabindex="0" role="img" aria-label="${escapeHtml(addedTip)}" title="${escapeHtml(addedTip)}" data-tip="${escapeHtml(addedTip)}">➕</span>
+      <span class="pod-meta-emoji" tabindex="0" role="img" aria-label="${escapeHtml(releasedTip)}" title="${escapeHtml(releasedTip)}" data-tip="${escapeHtml(releasedTip)}">📅</span>
     `;
   }
 
@@ -574,15 +574,15 @@
 
     controlsEl.innerHTML = `
       <div class="pod-sort-groups">
-        <div class="pod-sort-group" title="Sort by release date">
-          <span class="pod-sort-label" aria-hidden="true">📅</span>
-          <button type="button" class="${podcastSortDirBtnClass("released", "asc")}" data-sort="released" data-dir="asc" aria-label="Release date, oldest first">▲</button>
-          <button type="button" class="${podcastSortDirBtnClass("released", "desc")}" data-sort="released" data-dir="desc" aria-label="Release date, newest first">▼</button>
-        </div>
         <div class="pod-sort-group" title="Sort by date added to playlist">
           <span class="pod-sort-label" aria-hidden="true">➕</span>
           <button type="button" class="${podcastSortDirBtnClass("added", "asc")}" data-sort="added" data-dir="asc" aria-label="Date added, oldest first">▲</button>
           <button type="button" class="${podcastSortDirBtnClass("added", "desc")}" data-sort="added" data-dir="desc" aria-label="Date added, newest first">▼</button>
+        </div>
+        <div class="pod-sort-group" title="Sort by release date">
+          <span class="pod-sort-label" aria-hidden="true">📅</span>
+          <button type="button" class="${podcastSortDirBtnClass("released", "asc")}" data-sort="released" data-dir="asc" aria-label="Release date, oldest first">▲</button>
+          <button type="button" class="${podcastSortDirBtnClass("released", "desc")}" data-sort="released" data-dir="desc" aria-label="Release date, newest first">▼</button>
         </div>
       </div>
     `;
