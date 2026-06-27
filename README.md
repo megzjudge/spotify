@@ -1,4 +1,4 @@
-# Megan Judge's Spotify
+# Spotify-tracking Single-User Website
 
 A personal, live-updating browser for Spotify playlists and podcast episodes. The front end is a static page; all Spotify calls happen server-side through **Cloudflare Pages Functions**, so access tokens never touch the browser. Lightweight content (episode notes, external video links) is stored as JSON in this repo and edited through the GitHub API — git doubles as the database.
 
