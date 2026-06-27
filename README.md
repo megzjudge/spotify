@@ -1,8 +1,6 @@
-# Spotify-tracking Single-User Website
+# Spotify-Tracking Single-User Website
 
 A personal, live-updating browser for Spotify playlists and podcast episodes. The front end is a static page; all Spotify calls happen server-side through **Cloudflare Pages Functions**, so access tokens never touch the browser. Lightweight content (episode notes, external video links) is stored as JSON in this repo and edited through the GitHub API — git doubles as the database.
-
-🔗 Live: **https://spotify.jdge.cc**
 
 ## What it does
 
@@ -95,17 +93,6 @@ Authorize the app. The callback page prints a `SPOTIFY_REFRESH_TOKEN` — save i
 The note and video endpoints read the current JSON file from the repo via the GitHub Contents API, apply the change, and commit it back. Because each edit is a real commit, content is versioned and the `On Content Update` workflow fires on any push under `data/**` (currently it just logs the change — a hook for future automation).
 
 Write operations are gated: notes and videos require the `X-Auth` header to match `AUTH`; `/api/save` requires `x-admin-key` to match `ADMIN_KEY`. Read operations are public.
-
-## Local development
-
-Because the app depends on Pages Functions, run it with Wrangler so the `/api/*` routes work:
-
-```bash
-npm install -g wrangler
-wrangler pages dev .
-```
-
-Set the same environment variables locally (e.g. via a `.dev.vars` file) so the Spotify and GitHub calls succeed.
 
 ## Notes
 
