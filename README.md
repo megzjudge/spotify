@@ -10,7 +10,7 @@ A personal, live-updating browser for Spotify playlists and podcast episodes. Th
 - Supports **timestamped notes per podcast episode**, saved back into the repo so they persist and are versioned.
 - Keeps a short list of **external video links** (with auto-fetched title and thumbnail), capped to the most recent few.
 
-Only your public playlists are shown. Playlists are excluded if they aren't yours, are private, start with a `NP:` / `[Not Public]` prefix, or carry a `#notpublic` tag in the description — with an explicit allowlist so chosen playlists always appear.
+Only your public playlists are shown. Playlists are excluded by default if they aren't yours, are private, start with a `NP:` / `[Not Public]` prefix, or carry a `#notpublic` tag in the description — with an explicit allowlist so chosen playlists always appear.
 
 ## Architecture
 
