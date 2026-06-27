@@ -4,7 +4,7 @@ A personal, live-updating browser for Spotify playlists and podcast episodes. Th
 
 ## What it does
 
-- Pulls a curated view of your Spotify library live from the **Spotify Web API** — playlists grouped into sections (Daily Mix, Top, Other), a featured podcast playlist, and a set of highlighted "others" playlists.
+- Pulls a curated view of your Spotify library live pulled easily from the ([https://developer.spotify.com/dashboard](https://developer.spotify.com/documentation/web-api)) — playlists grouped into sections (Daily Mix, Top, Other), a featured podcast playlist, and a set of highlighted "others" playlists.
 - Shows headline totals: number of playlists, total songs, and an approximate listening time. Exact per-playlist durations are computed on demand.
 - Lets you open a playlist and list its tracks and podcast episodes, with episodes enriched by release date and artwork for reliable sorting.
 - Supports **timestamped notes per podcast episode**, saved back into the repo so they persist and are versioned.
