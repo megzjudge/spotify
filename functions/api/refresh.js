@@ -203,21 +203,38 @@ export async function onRequestPost(context) {
 ========================= */
 
 async function getUserAccessToken(env) {
+  const clientId = env.SPOTIFY_PROFILE || null;
+  const clientSecret = env.SPOTIFY_KEY || null;
+  const refreshToken = env.SPOTIFY_REFRESH_TOKEN || null;
+
+  if (!clientId || !clientSecret || !refreshToken) {
+    const missing = [
+      !clientId && "SPOTIFY_PROFILE",
+      !clientSecret && "SPOTIFY_KEY",
+      !refreshToken && "SPOTIFY_REFRESH_TOKEN"
+    ].filter(Boolean);
+    throw new Error(`Missing Spotify OAuth env vars: ${missing.join(", ")}`);
+  }
+
   const res = await fetch("https://accounts.spotify.com/api/token", {
     method: "POST",
     headers: {
-      Authorization: "Basic " + btoa(`${env.SPOTIFY_PROFILE}:${env.SPOTIFY_KEY}`),
+      Authorization: "Basic " + btoa(`${clientId}:${clientSecret}`),
       "Content-Type": "application/x-www-form-urlencoded"
     },
     body: new URLSearchParams({
       grant_type: "refresh_token",
-      refresh_token: env.SPOTIFY_REFRESH_TOKEN
+      refresh_token: refreshToken
     })
   });
 
-  const data = await res.json().catch(() => ({}));
+  const text = await res.text().catch(() => "");
+  let data = {};
+  try { data = text ? JSON.parse(text) : {}; } catch { data = { rawText: text }; }
+
   if (!res.ok || !data?.access_token) {
-    throw new Error("Failed to refresh Spotify access token.");
+    const detail = data?.error_description || data?.error || text || `HTTP ${res.status}`;
+    throw new Error(`Failed to refresh Spotify access token: ${detail}`);
   }
   return data.access_token;
 }
