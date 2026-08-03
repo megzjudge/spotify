@@ -935,6 +935,22 @@ main {
   text-align: left;
 }
 
+.new-badge {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: var(--pill);
+  background: var(--spotify-green);
+  color: #04120a;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1;
+}
+
 .podcast-item-sub {
   margin-top: 6px;
   color: var(--muted2);
@@ -1243,6 +1259,13 @@ detail-sub {
   gap: 10px;
   padding: 12px 16px;
   border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+.track-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .track-name {

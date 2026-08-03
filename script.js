@@ -497,6 +497,20 @@
     return parseSortDate(ep?.addedAt ?? ep?.added_at);
   }
 
+  const NEW_BADGE_DAYS = 30;
+
+  function isNewSince(ms, days = NEW_BADGE_DAYS) {
+    if (!ms) return false;
+    const cutoffMs = days * 24 * 60 * 60 * 1000;
+    return Date.now() - ms <= cutoffMs;
+  }
+
+  function newBadgeHtml(ms) {
+    return isNewSince(ms)
+      ? `<span class="new-badge" title="Added within the last ${NEW_BADGE_DAYS} days">New</span>`
+      : "";
+  }
+
   function fmtEpisodeDisplayDate(raw, precision) {
     if (!raw) return "Unknown";
     const parts = String(raw).trim().split("-");
@@ -1176,6 +1190,7 @@
       : "";
   
     const metaIconsHtml = renderPodcastMetaIcons(it);
+    const badgeHtml = newBadgeHtml(episodeAddedMs(it));
 
     return `
       <li class="podcast-item" data-episode-id="${escapeHtml(episodeId)}">
@@ -1197,6 +1212,7 @@
           <div class="podcast-ep-meta">
             <div class="podcast-item-head">
               <div class="podcast-item-title">${name}</div>
+              ${badgeHtml}
               <div class="podcast-item-actions">
                 ${metaIconsHtml}
                 <button
@@ -1593,10 +1609,14 @@
     const url = t.url || "#";
     const ms = Number(t.durationMs) || 0;
     const mins = ms ? `${Math.round(ms / 60000)}m` : "";
+    const badgeHtml = newBadgeHtml(parseSortDate(t.addedAt));
     return `
       <li class="track">
         <div class="track-main">
-          <a class="track-name" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${name}</a>
+          <div class="track-name-row">
+            <a class="track-name" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${name}</a>
+            ${badgeHtml}
+          </div>
           <div class="track-meta">${artists}</div>
         </div>
         <div class="track-right">${escapeHtml(mins)}</div>
