@@ -302,6 +302,11 @@
             </div>
           </div>
 
+          <p class="playlist-progress-label" id="playlistProgressLabel" hidden>Pulling live data from Spotify…</p>
+          <div class="refresh-progress full-width" id="playlistProgress" aria-hidden="true">
+            <div class="refresh-progress-bar" id="playlistProgressBar"></div>
+          </div>
+
           <ul class="tracklist" id="tracklist"></ul>
         </div>
       </div>
@@ -1649,6 +1654,41 @@
     backdrop.setAttribute("aria-hidden", "true");
   }
 
+  function showPlaylistProgress() {
+    const wrap = document.getElementById("playlistProgress");
+    const bar = document.getElementById("playlistProgressBar");
+    const label = document.getElementById("playlistProgressLabel");
+    if (!wrap || !bar) return;
+    if (label) label.hidden = false;
+    wrap.classList.add("is-active");
+    bar.style.transition = "none";
+    bar.style.width = "0%";
+  }
+
+  // Driven by real page-completion counts (see fetchAllPlaylistItems), not a timer.
+  function updatePlaylistProgress(completedPages, totalPages) {
+    const bar = document.getElementById("playlistProgressBar");
+    if (!bar || !totalPages) return;
+    const pct = Math.min(100, Math.round((completedPages / totalPages) * 100));
+    bar.style.transition = "width 0.25s ease-out";
+    bar.style.width = `${pct}%`;
+  }
+
+  function hidePlaylistProgress() {
+    const wrap = document.getElementById("playlistProgress");
+    const bar = document.getElementById("playlistProgressBar");
+    const label = document.getElementById("playlistProgressLabel");
+    if (!wrap || !bar) return;
+    bar.style.transition = "width 0.2s ease-out";
+    bar.style.width = "100%";
+    setTimeout(() => {
+      wrap.classList.remove("is-active");
+      bar.style.transition = "none";
+      bar.style.width = "0%";
+      if (label) label.hidden = true;
+    }, 250);
+  }
+
   async function fetchPlaylistItemsPage(playlistId, offset, limit) {
     const res = await fetch(API_PLAYLIST, {
       method: "POST",
@@ -1670,8 +1710,10 @@
   // /api/playlist caps a single response to 200 items by default, so a playlist
   // with more tracks than that needs multiple pages. The first page also tells us
   // the real totalTracks, so the remaining pages can be fetched in parallel instead
-  // of following next-page links one at a time.
-  async function fetchAllPlaylistItems(playlistId) {
+  // of following next-page links one at a time. onProgress(completedPages, totalPages)
+  // fires after the first page and after each parallel page resolves, so callers can
+  // drive a real (not simulated) progress bar.
+  async function fetchAllPlaylistItems(playlistId, onProgress) {
     const pageSize = PLAYLIST_TRACKS_PAGE_LIMIT;
 
     const first = await fetchPlaylistItemsPage(playlistId, 0, pageSize);
@@ -1688,9 +1730,19 @@
       remainingOffsets.push(offset);
     }
 
+    const totalPages = 1 + remainingOffsets.length;
+    let completedPages = 1;
+    onProgress?.(completedPages, totalPages);
+
     if (remainingOffsets.length) {
       const pages = await Promise.allSettled(
-        remainingOffsets.map((offset) => fetchPlaylistItemsPage(playlistId, offset, pageSize))
+        remainingOffsets.map((offset) =>
+          fetchPlaylistItemsPage(playlistId, offset, pageSize).then((data) => {
+            completedPages++;
+            onProgress?.(completedPages, totalPages);
+            return data;
+          })
+        )
       );
       for (const result of pages) {
         if (result.status === "fulfilled" && Array.isArray(result.value.items)) {
@@ -1720,8 +1772,9 @@
     detailSub.textContent = "";
     tracklist.innerHTML = "";
 
+    showPlaylistProgress();
     try {
-      const { playlist: p, items } = await fetchAllPlaylistItems(playlistId);
+      const { playlist: p, items } = await fetchAllPlaylistItems(playlistId, updatePlaylistProgress);
 
       detailThumb.src = p.image || "https://spotify.jdge.cc/images/spotify_logo.png";
       detailTitle.textContent = p.name || "Untitled playlist";
@@ -1741,6 +1794,8 @@
         <div class="track-name">Failed to load playlist</div>
         <div class="track-meta">${escapeHtml(String(err.message || err))}</div>
       </div></li>`;
+    } finally {
+      hidePlaylistProgress();
     }
   }
 

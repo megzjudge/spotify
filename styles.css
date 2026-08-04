@@ -184,6 +184,17 @@ header h1 {
   opacity: 1;
 }
 
+.refresh-progress.full-width {
+  width: 100%;
+  margin: 0 0 10px;
+}
+
+.playlist-progress-label {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
 .refresh-progress-bar {
   height: 100%;
   width: 0%;
