@@ -1384,6 +1384,16 @@ footer {
   white-space: nowrap;
 }
 
+.footer-button {
+  flex-shrink: 0;
+  color: var(--muted2);
+  text-decoration: none;
+}
+
+.footer-button:hover {
+  text-decoration: underline;
+}
+
 /* =========================
    Responsive
 ========================= */
