@@ -35,6 +35,8 @@
    * DOM
    ***********************/
   const refreshButton = document.getElementById("refreshButton");
+  const refreshProgress = document.getElementById("refreshProgress");
+  const refreshProgressBar = document.getElementById("refreshProgressBar");
   const appMain = document.getElementById("appMain");
 
   /***********************
@@ -60,6 +62,11 @@
       lastError: null
     },
 
+    // playlistId -> boolean, whether a track was added to that playlist within
+    // the last NEW_BADGE_DAYS days. Populated progressively in the background
+    // (see checkPlaylistsForNewTracksInBackground) so refresh stays fast.
+    playlistNewFlag: new Map(),
+
     // Episode notes
     episodeNotes: {
       cache: Object.create(null),
@@ -76,6 +83,31 @@
     if (!refreshButton) return;
     refreshButton.disabled = isLoading;
     refreshButton.classList.toggle("is-loading", isLoading);
+    if (isLoading) startRefreshProgress(); else finishRefreshProgress();
+  }
+
+  // Spotify sync usually takes ~20-30s, so ease the bar toward 92% over that
+  // window as a "this is roughly how long it takes" cue, then snap to 100%
+  // whenever the request actually resolves (could be sooner or later).
+  function startRefreshProgress() {
+    if (!refreshProgress || !refreshProgressBar) return;
+    refreshProgress.classList.add("is-active");
+    refreshProgressBar.style.transition = "none";
+    refreshProgressBar.style.width = "0%";
+    void refreshProgressBar.offsetWidth; // force reflow so the transition below animates from 0%
+    refreshProgressBar.style.transition = "width 26s cubic-bezier(0.1, 0.6, 0.2, 1)";
+    refreshProgressBar.style.width = "92%";
+  }
+
+  function finishRefreshProgress() {
+    if (!refreshProgress || !refreshProgressBar) return;
+    refreshProgressBar.style.transition = "width 0.35s ease-out";
+    refreshProgressBar.style.width = "100%";
+    setTimeout(() => {
+      refreshProgress.classList.remove("is-active");
+      refreshProgressBar.style.transition = "none";
+      refreshProgressBar.style.width = "0%";
+    }, 450);
   }
 
   function escapeHtml(str) {
@@ -291,8 +323,10 @@
     const img = p.image || "https://spotify.jdge.cc/images/spotify_logo.png";
     const count = typeof p.totalTracks === "number" ? `${p.totalTracks} items` : "";
     const owner = p.ownerLabel ? ` • ${p.ownerLabel}` : "";
+    const isNew = state.playlistNewFlag.get(p.id) === true;
     return `
       <div class="card" data-playlist-id="${escapeHtml(p.id)}">
+        <span class="card-new-badge" data-card-new-badge title="A track was added within the last ${NEW_BADGE_DAYS} days" ${isNew ? "" : "hidden"}>New</span>
         <img class="thumb" src="${escapeHtml(img)}" alt="" loading="lazy" decoding="async">
         <div class="card-meta">
           <p class="card-title">${escapeHtml(p.name || "Untitled")}</p>
@@ -705,6 +739,72 @@
       : `<div class="muted-small">No “others” playlists added.</div>`;
 
     wireCardClicks(el);
+  }
+
+  /***********************
+   * New-track badge (background check)
+   ***********************/
+  const NEW_TRACK_CHECK_CONCURRENCY = 4;
+  const NEW_TRACK_CHECK_TAIL = 15; // trailing items inspected per playlist (new tracks are normally appended at the end)
+
+  async function playlistHasRecentTrack(id, totalTracks) {
+    const limit = NEW_TRACK_CHECK_TAIL;
+    const offset = typeof totalTracks === "number" ? Math.max(0, totalTracks - limit) : 0;
+
+    const res = await fetch(API_PLAYLIST, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ playlistId: id, limit, offset })
+    });
+    if (!res.ok) return false;
+
+    const data = await res.json().catch(() => null);
+    const items = Array.isArray(data?.items) ? data.items : [];
+    return items.some((t) => {
+      const ms = parseSortDate(t.addedAt);
+      return ms != null && isNewSince(ms);
+    });
+  }
+
+  function setCardNewBadge(playlistId, isNew) {
+    document.querySelectorAll(`.card[data-playlist-id="${CSS.escape(playlistId)}"] [data-card-new-badge]`)
+      .forEach((el) => { el.hidden = !isNew; });
+  }
+
+  // Runs after a refresh, a few playlists at a time, so the refresh itself stays fast.
+  // Checks the tail of each playlist for tracks added within NEW_BADGE_DAYS and pops
+  // the "New" corner badge onto that playlist's card as results come in.
+  function checkPlaylistsForNewTracksInBackground() {
+    const entries = [];
+    const seen = new Set();
+    const collect = (p) => {
+      if (!p?.id || seen.has(p.id)) return;
+      seen.add(p.id);
+      entries.push({ id: p.id, totalTracks: typeof p.totalTracks === "number" ? p.totalTracks : null });
+    };
+
+    const sections = state.snapshot?.sections || {};
+    (sections.dailyMix || []).forEach(collect);
+    (sections.top || []).forEach(collect);
+    (sections.other || []).forEach(collect);
+    (state.others || []).forEach(collect);
+
+    let cursor = 0;
+    async function worker() {
+      while (cursor < entries.length) {
+        const entry = entries[cursor++];
+        try {
+          const isNew = await playlistHasRecentTrack(entry.id, entry.totalTracks);
+          state.playlistNewFlag.set(entry.id, isNew);
+          if (isNew) setCardNewBadge(entry.id, true);
+        } catch (e) {
+          console.warn("New-track check failed for playlist", entry.id, e);
+        }
+      }
+    }
+
+    const workers = Array.from({ length: NEW_TRACK_CHECK_CONCURRENCY }, worker);
+    Promise.allSettled(workers);
   }
 
   /***********************
@@ -1591,7 +1691,7 @@
       if (p.ownerLabel) bits.push(p.ownerLabel);
       detailSub.textContent = bits.join(" • ");
 
-      tracklist.innerHTML = items.map(renderTrack).join("");
+      tracklist.innerHTML = sortItemsWithNewFirst(items).map(renderTrack).join("");
       setStatus("");
     } catch (err) {
       console.error(err);
@@ -1601,6 +1701,16 @@
         <div class="track-meta">${escapeHtml(String(err.message || err))}</div>
       </div></li>`;
     }
+  }
+
+  // Tracks still tagged "New" (added within NEW_BADGE_DAYS) float to the top,
+  // newest first; everything else keeps the playlist's normal order.
+  function sortItemsWithNewFirst(items) {
+    const withMeta = items.map((it, idx) => ({ it, idx, ms: parseSortDate(it.addedAt) }));
+    const isNew = (m) => m.ms != null && isNewSince(m.ms);
+    const newer = withMeta.filter(isNew).sort((a, b) => (b.ms - a.ms) || (a.idx - b.idx));
+    const rest = withMeta.filter((m) => !isNew(m));
+    return [...newer, ...rest].map((m) => m.it);
   }
 
   function renderTrack(t) {
@@ -1675,6 +1785,9 @@
       renderPlaylists();
       renderOthers();
       renderPodcastColumn();
+
+      // fire-and-forget: pops "New" badges onto playlist cards as each one is checked
+      checkPlaylistsForNewTracksInBackground();
 
       setStatus("");
     } catch (err) {

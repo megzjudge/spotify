@@ -39,10 +39,15 @@
         <h1>Megan Judge’s Spotify</h1>
       </div>
 
-      <button id="refreshButton" class="primary-button" type="button">
-        <span class="button-label-default">Refresh from Spotify</span>
-        <span class="button-label-loading">Refreshing…</span>
-      </button>
+      <div class="refresh-control">
+        <button id="refreshButton" class="primary-button" type="button">
+          <span class="button-label-default">Refresh from Spotify</span>
+          <span class="button-label-loading">Refreshing…</span>
+        </button>
+        <div class="refresh-progress" id="refreshProgress" aria-hidden="true">
+          <div class="refresh-progress-bar" id="refreshProgressBar"></div>
+        </div>
+      </div>
     </div>
   </header>
 

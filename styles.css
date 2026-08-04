@@ -148,7 +148,7 @@ header h1 {
   box-shadow: none;
 }
 
-.primary-button .button-label-loading { 
+.primary-button .button-label-loading {
   display: none;
 }
 
@@ -156,8 +156,39 @@ header h1 {
   display: none;
 }
 
-.primary-button.is-loading .button-label-loading { 
-  display: inline; 
+.primary-button.is-loading .button-label-loading {
+  display: inline;
+}
+
+.refresh-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Fills over ~26s (Spotify sync usually takes 20-30s) so the wait feels bounded;
+   it's an estimate, not real progress, so it eases toward 92% and never claims 100%
+   until the request actually resolves. */
+.refresh-progress {
+  width: 120px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.12);
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
+.refresh-progress.is-active {
+  opacity: 1;
+}
+
+.refresh-progress-bar {
+  height: 100%;
+  width: 0%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #1db954, #19a34a);
 }
 
 /* =========================
@@ -489,14 +520,15 @@ main {
   border: 1px solid rgba(255,255,255,0.06);
   background: rgba(0,0,0,0.10);
   color: rgba(255,255,255,0.92);
-  border-radius: 10px;
-  width: 28px;
-  height: 28px;
-  font-size: 14px;
+  border-radius: 8px;
+  width: 24px;
+  height: 24px;
+  font-size: 13px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
+  flex-shrink: 0;
   transition: transform 0.08s ease-out, border-color 0.12s ease-out, background 0.12s ease-out, opacity 0.12s ease-out;
   padding: 0;
 }
@@ -579,6 +611,7 @@ main {
 }
 
 .card {
+  position: relative;
   display: grid;
   grid-template-columns: 56px 1fr;
   gap: 12px;
@@ -589,6 +622,30 @@ main {
   padding: 10px;
   cursor: pointer;
   transition: transform 0.08s ease-out, border-color 0.12s ease-out;
+}
+
+.card-new-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: var(--pill);
+  background: var(--spotify-green);
+  color: #04120a;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+  z-index: 2;
+}
+
+.card-new-badge[hidden] {
+  display: none;
 }
 
 .card:hover {
@@ -890,7 +947,7 @@ main {
 
 .podcast-link-grid {
   display: grid;
-  grid-template-columns: var(--podThumb) 1fr 40px;
+  grid-template-columns: var(--podThumb) 1fr;
   gap: 12px;
   align-items: center;
   padding: var(--podRowPadY);
@@ -1420,6 +1477,15 @@ footer {
   .container-header {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .refresh-control {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .refresh-progress {
+    width: 100%;
   }
 
   #podcastHead {
