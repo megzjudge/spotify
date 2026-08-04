@@ -28,6 +28,10 @@
   // ✅ Safety cap so we never go crazy if an API bug loops pages.
   const PODCAST_MAX_ITEMS = 5000;
 
+  // ✅ Playlist track paging config (regular, non-podcast playlists)
+  const PLAYLIST_TRACKS_PAGE_LIMIT = 200;
+  const PLAYLIST_TRACKS_MAX_ITEMS = 5000;
+
   // ✅ Notes auth (client-side) — stored per-session only.
   const SS_NOTES_AUTH_KEY = "spotify_notes_auth";
 
@@ -715,19 +719,18 @@
   }
 
   async function loadOthersFallback() {
+    // /api/refresh already includes othersPlaylists in the common case, so this
+    // usually resolves from othersById with zero network calls. When it does need
+    // to fall back, resolve the misses in parallel rather than one at a time.
     const othersById = new Map((state.others || []).map((p) => [p.id, p]));
-    const others = [];
 
-    for (const id of OTHERS_PLAYLIST_IDS) {
-      if (othersById.has(id)) {
-        others.push(othersById.get(id));
-        continue;
-      }
-      const meta = await fetchPlaylistMeta(id, "by others");
-      if (meta) others.push(meta);
-    }
+    const resolved = await Promise.all(
+      OTHERS_PLAYLIST_IDS.map((id) =>
+        othersById.has(id) ? Promise.resolve(othersById.get(id)) : fetchPlaylistMeta(id, "by others")
+      )
+    );
 
-    state.others = others;
+    state.others = resolved.filter(Boolean);
   }
 
   function renderOthers() {
@@ -1646,6 +1649,61 @@
     backdrop.setAttribute("aria-hidden", "true");
   }
 
+  async function fetchPlaylistItemsPage(playlistId, offset, limit) {
+    const res = await fetch(API_PLAYLIST, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ playlistId, limit, offset })
+    });
+
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch {}
+
+    if (!res.ok || !data) {
+      const msg = (data && (data.message || data.error)) || text || `HTTP ${res.status}`;
+      throw new Error(msg);
+    }
+    return data;
+  }
+
+  // /api/playlist caps a single response to 200 items by default, so a playlist
+  // with more tracks than that needs multiple pages. The first page also tells us
+  // the real totalTracks, so the remaining pages can be fetched in parallel instead
+  // of following next-page links one at a time.
+  async function fetchAllPlaylistItems(playlistId) {
+    const pageSize = PLAYLIST_TRACKS_PAGE_LIMIT;
+
+    const first = await fetchPlaylistItemsPage(playlistId, 0, pageSize);
+    const playlist = first.playlist || {};
+    const items = Array.isArray(first.items) ? first.items.slice() : [];
+
+    const total = Math.min(
+      typeof playlist.totalTracks === "number" ? playlist.totalTracks : items.length,
+      PLAYLIST_TRACKS_MAX_ITEMS
+    );
+
+    const remainingOffsets = [];
+    for (let offset = pageSize; offset < total; offset += pageSize) {
+      remainingOffsets.push(offset);
+    }
+
+    if (remainingOffsets.length) {
+      const pages = await Promise.allSettled(
+        remainingOffsets.map((offset) => fetchPlaylistItemsPage(playlistId, offset, pageSize))
+      );
+      for (const result of pages) {
+        if (result.status === "fulfilled" && Array.isArray(result.value.items)) {
+          items.push(...result.value.items);
+        } else if (result.status === "rejected") {
+          console.warn("Playlist page fetch failed for", playlistId, result.reason);
+        }
+      }
+    }
+
+    return { playlist, items: items.slice(0, PLAYLIST_TRACKS_MAX_ITEMS) };
+  }
+
   async function openPlaylistModal(playlistId) {
     setStatus("Loading playlist…");
     openModal();
@@ -1663,24 +1721,7 @@
     tracklist.innerHTML = "";
 
     try {
-      const res = await fetch(API_PLAYLIST, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ playlistId })
-      });
-
-      const text = await res.text();
-      let data = null;
-      try { data = text ? JSON.parse(text) : null; } catch {}
-
-      if (!res.ok) {
-        const msg = (data && (data.message || data.error)) || text || `HTTP ${res.status}`;
-        console.error("Playlist modal /api/playlist error payload:", { status: res.status, data, text });
-        throw new Error(msg);
-      }
-
-      const p = data.playlist || {};
-      const items = Array.isArray(data.items) ? data.items : [];
+      const { playlist: p, items } = await fetchAllPlaylistItems(playlistId);
 
       detailThumb.src = p.image || "https://spotify.jdge.cc/images/spotify_logo.png";
       detailTitle.textContent = p.name || "Untitled playlist";

@@ -43,22 +43,26 @@ export async function onRequestPost(context) {
     /***********************
      * USER + PLAYLISTS
      ***********************/
-    const me = await fetchMe(accessToken);
+    // /me and /me/playlists don't depend on each other — run them together
+    // instead of paying two sequential round-trips to Spotify.
+    const [me, playlistsRaw0] = await Promise.all([
+      fetchMe(accessToken),
+      fetchMyPlaylists(accessToken, MAX_PLAYLISTS)
+    ]);
     const myUserId = me?.id;
     if (!myUserId) throw new Error("Could not resolve Spotify user ID.");
 
-    let playlistsRaw = await fetchMyPlaylists(accessToken, MAX_PLAYLISTS);
+    let playlistsRaw = playlistsRaw0;
 
-    // Ensure allowlisted playlists are included even if not returned in /me/playlists
+    // Ensure allowlisted playlists are included even if not returned in /me/playlists.
+    // These lookups are independent of each other, so fire them in parallel.
     const seen = new Set(playlistsRaw.map(p => p?.id).filter(Boolean));
-    for (const id of ALLOWLIST_IDS) {
-      if (!id || seen.has(id)) continue;
-      try {
-        const p = await fetchPlaylist(accessToken, id);
-        playlistsRaw.push(p);
-      } catch {
-        // ignore
-      }
+    const missingAllowlistIds = [...ALLOWLIST_IDS].filter(id => id && !seen.has(id));
+    const fetchedAllowlisted = await Promise.all(
+      missingAllowlistIds.map(id => fetchPlaylist(accessToken, id).catch(() => null))
+    );
+    for (const p of fetchedAllowlisted) {
+      if (p) playlistsRaw.push(p);
     }
 
     /***********************
@@ -89,30 +93,25 @@ export async function onRequestPost(context) {
 
     const podcastPlaylist = normalized.find(p => p.id === PODCAST_PLAYLIST_ID) || null;
 
-    const othersPlaylists = [];
-    const othersSeen = new Set();
+    // Resolve each "others" playlist independently and in parallel — Promise.all
+    // keeps them in OTHERS_PLAYLIST_IDS order regardless of which resolves first.
+    const uniqueOthersIds = [...new Set(OTHERS_PLAYLIST_IDS)];
+    const othersResolved = await Promise.all(
+      uniqueOthersIds.map(async id => {
+        const fromNorm = normalized.find(p => p.id === id);
+        const fromRaw = playlistsRaw.find(p => p?.id === id);
+        if (fromNorm) return fromNorm;
+        if (fromRaw) return normalizePlaylistMeta(fromRaw, myUserId);
 
-    for (const id of OTHERS_PLAYLIST_IDS) {
-      if (othersSeen.has(id)) continue;
-
-      const fromNorm = normalized.find(p => p.id === id);
-      const fromRaw = playlistsRaw.find(p => p?.id === id);
-      let meta = fromNorm || (fromRaw ? normalizePlaylistMeta(fromRaw, myUserId) : null);
-
-      if (!meta) {
         try {
           const p = await fetchPlaylist(accessToken, id);
-          meta = normalizePlaylistMeta(p, myUserId);
+          return normalizePlaylistMeta(p, myUserId);
         } catch {
-          // ignore
+          return null;
         }
-      }
-
-      if (meta) {
-        othersPlaylists.push(meta);
-        othersSeen.add(id);
-      }
-    }
+      })
+    );
+    const othersPlaylists = othersResolved.filter(Boolean);
 
     const candidates = normalized.filter(p =>
       p.id !== PODCAST_PLAYLIST_ID &&
@@ -202,7 +201,17 @@ export async function onRequestPost(context) {
    HELPERS
 ========================= */
 
+// Reused across requests handled by the same warm isolate, same pattern as
+// playlist.js's TOKEN_CACHE — skips a full Spotify token round-trip on every
+// /api/refresh call.
+const TOKEN_CACHE = { token: null, expiresAt: 0 };
+
 async function getUserAccessToken(env) {
+  const now = Date.now();
+  if (TOKEN_CACHE.token && TOKEN_CACHE.expiresAt - 60000 > now) {
+    return TOKEN_CACHE.token;
+  }
+
   const clientId = env.SPOTIFY_PROFILE || null;
   const clientSecret = env.SPOTIFY_KEY || null;
   const refreshToken = env.SPOTIFY_REFRESH_TOKEN || null;
@@ -236,7 +245,12 @@ async function getUserAccessToken(env) {
     const detail = data?.error_description || data?.error || text || `HTTP ${res.status}`;
     throw new Error(`Failed to refresh Spotify access token: ${detail}`);
   }
-  return data.access_token;
+
+  const expiresIn = Number(data.expires_in) || 3600;
+  TOKEN_CACHE.token = data.access_token;
+  TOKEN_CACHE.expiresAt = Date.now() + expiresIn * 1000;
+
+  return TOKEN_CACHE.token;
 }
 
 async function fetchMe(token) {
@@ -255,17 +269,34 @@ async function fetchPlaylist(token, id) {
   return r.json();
 }
 
+async function fetchPlaylistsPage(token, offset, pageSize) {
+  const r = await fetch(`https://api.spotify.com/v1/me/playlists?limit=${pageSize}&offset=${offset}`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  return r.json().catch(() => ({}));
+}
+
 async function fetchMyPlaylists(token, limit) {
-  let out = [];
-  let next = "https://api.spotify.com/v1/me/playlists?limit=50";
-  while (next && out.length < limit) {
-    const r = await fetch(next, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    const d = await r.json().catch(() => ({}));
-    out.push(...(d.items || []));
-    next = d.next;
+  const pageSize = 50;
+
+  // First page tells us the real total, so we know how many more pages are
+  // needed — fetch those in parallel instead of following `next` one at a time.
+  const first = await fetchPlaylistsPage(token, 0, pageSize);
+  const out = [...(first.items || [])];
+  const total = Math.min(Number(first.total) || out.length, limit);
+
+  const remainingOffsets = [];
+  for (let offset = pageSize; offset < total; offset += pageSize) {
+    remainingOffsets.push(offset);
   }
+
+  if (remainingOffsets.length) {
+    const pages = await Promise.all(
+      remainingOffsets.map(offset => fetchPlaylistsPage(token, offset, pageSize))
+    );
+    for (const d of pages) out.push(...(d.items || []));
+  }
+
   return out.slice(0, limit);
 }
 
