@@ -41,8 +41,10 @@ Everything runs at the edge on Cloudflare's Workers runtime. Access tokens are m
 | `functions/api/external-videos.js` | List/add external video links (`data/external-videos.json`) |
 | `functions/api/save.js` | Generic "commit JSON to the repo" endpoint |
 | `functions/api/*-test.js` | Diagnostic endpoints for checking env wiring (safe to remove) |
+| `functions/api/token-health.js` | Checks the Spotify refresh token is still valid; emails an alert if it's dead |
 | `data/*.json` | Persisted content, committed by the functions above |
 | `.github/workflows/workflow.yml` | Logs a note whenever anything under `data/**` changes |
+| `.github/workflows/token-health-check.yml` | Daily cron that calls `/api/token-health` |
 
 ## Setup
 
@@ -73,6 +75,10 @@ Note the **Client ID** and **Client Secret**.
 | `GITHUB_EXTERNAL_PATH` | Optional, defaults to `data/external-videos.json` |
 | `AUTH` | Shared secret required to **write** notes/videos (sent as the `X-Auth` header) |
 | `ADMIN_KEY` | Shared secret for `/api/save` (sent as the `x-admin-key` header) |
+| `CRON_SECRET` | Shared secret required to call `/api/token-health` (sent as the `x-cron-secret` header) |
+| `RESEND_API_KEY` | API key from [resend.com](https://resend.com), used to send the dead-token alert email |
+| `ALERT_EMAIL` | Address the dead-token alert is sent to |
+| `RESEND_FROM` | Optional, defaults to `onboarding@resend.dev` (Resend's shared test sender — only deliverable to the account owner's own address unless you verify a custom domain) |
 
 > **Heads-up on `GITHUB_PATH`:** it's read by both `episode-note.js` (which needs `data/episode-notes.json`) and the generic `save.js` (which falls back to `data/content.json`). If you use both features, point `GITHUB_PATH` at the notes file and pass an explicit path/payload to `/api/save` so they don't collide.
 
@@ -87,6 +93,17 @@ https://<your-domain>/api/auth/start
 Authorize the app. The callback page prints a `SPOTIFY_REFRESH_TOKEN` — save it as a secret in Cloudflare, then redeploy.
 
 > 🔒 **Security:** once the token is saved, delete `functions/api/auth/start.js` and `functions/api/auth/callback.js` and redeploy. They exist only to mint the token and shouldn't stay live. (If Spotify doesn't return a refresh token because you've authorized before, revoke the app under Spotify → Account → Apps and retry.)
+
+### 4. Alert on a dead Spotify token
+
+Spotify refresh tokens can be revoked or stop working (e.g. if you re-authorize the app, revoke access under Spotify → Account → Apps, or the app itself gets removed). `/api/token-health` checks this on a schedule and emails you if it dies, since otherwise the site just fails silently until someone notices.
+
+1. Create a free account at [resend.com](https://resend.com) and grab an API key.
+2. Set these Cloudflare Pages env vars: `RESEND_API_KEY`, `ALERT_EMAIL` (where the alert goes), and `CRON_SECRET` (any random string — shared with the GitHub Action below).
+3. In the GitHub repo, add two **Actions secrets**: `SITE_URL` (e.g. `https://your-domain.com`) and `CRON_SECRET` (same value as the Cloudflare one).
+4. `.github/workflows/token-health-check.yml` runs daily and calls the endpoint — it also fails visibly in the Actions tab if the token is dead, in addition to the email.
+
+You can trigger it manually any time from the Actions tab (`Spotify Token Health Check` → `Run workflow`) to confirm it's wired up.
 
 ## How content editing works
 

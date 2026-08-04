@@ -1,6 +1,7 @@
-function html(msg) {
+function html(msg, color) {
+  const style = `white-space:pre-wrap;font:14px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace${color ? `;color:${color}` : ""}`;
   return new Response(
-    `<!doctype html><meta charset="utf-8"><pre style="white-space:pre-wrap;font:14px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace">${msg}</pre>`,
+    `<!doctype html><meta charset="utf-8"><pre style="${style}">${msg}</pre>`,
     { headers: { "content-type": "text/html; charset=utf-8" } }
   );
 }
@@ -63,6 +64,7 @@ export async function onRequestGet({ env, request }) {
     "✅ Refresh token minted.\n\n" +
     "Save this in Cloudflare Pages → Environment Variables (Secrets):\n\n" +
     "SPOTIFY_REFRESH_TOKEN = " + refreshToken + "\n\n" +
-    "IMPORTANT: After saving, delete /api/auth/start and /api/auth/callback from your repo and redeploy."
+    "Then redeploy (by editing any file in <a href='https://spotify.jdge.cc/api/auth/start'>Token</a> GitHub) so the new value actually takes effect (Cloudflare Pages only applies env var changes to the next deployment).",
+    "#e67e22"
   );
 }
