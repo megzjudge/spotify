@@ -19,7 +19,8 @@
     "41PZG18MrSTagagiIaiG4X",
     "71z6BdHlnfNj4DKRhuu1Fk",
     "7jYNznHoIYgJBzwT5jpoOe",
-    "4OXFjf05aU4K1B17AmA7ew"
+    "4OXFjf05aU4K1B17AmA7ew",
+    "5ZmAXSBNOEXYLf1e2MiF1D"
   ];
 
   // ✅ Podcast paging config
@@ -41,6 +42,7 @@
   const refreshButton = document.getElementById("refreshButton");
   const refreshProgress = document.getElementById("refreshProgress");
   const refreshProgressBar = document.getElementById("refreshProgressBar");
+  const refreshProgressLabel = document.getElementById("refreshProgressLabel");
   const appMain = document.getElementById("appMain");
 
   /***********************
@@ -95,6 +97,7 @@
   // whenever the request actually resolves (could be sooner or later).
   function startRefreshProgress() {
     if (!refreshProgress || !refreshProgressBar) return;
+    if (refreshProgressLabel) refreshProgressLabel.hidden = false;
     refreshProgress.classList.add("is-active");
     refreshProgressBar.style.transition = "none";
     refreshProgressBar.style.width = "0%";
@@ -111,6 +114,7 @@
       refreshProgress.classList.remove("is-active");
       refreshProgressBar.style.transition = "none";
       refreshProgressBar.style.width = "0%";
+      if (refreshProgressLabel) refreshProgressLabel.hidden = true;
     }, 450);
   }
 
@@ -523,6 +527,11 @@
     let m = Number(parts[1]) || 0;
     let d = Number(parts[2]) || 0;
 
+    // Spotify sometimes returns a placeholder/zero year (e.g. "0000-07-29") instead
+    // of omitting release_date entirely for catalog entries with no known year.
+    // Treat that the same as "no date" rather than sorting it as the oldest thing ever.
+    if (!y) return null;
+
     if (precision === "year") {
       m = 1;
       d = 1;
@@ -560,6 +569,9 @@
     const y = parts[0];
     const m = parts[1];
     const d = parts[2];
+
+    // Same zero/placeholder-year guard as episodeReleaseSortKey.
+    if (!Number(y)) return "Unknown";
 
     if (precision === "year" || (!m && !d)) return y;
     if (precision === "month" || !d) {
@@ -604,10 +616,23 @@
     return sortBy === "added" ? episodeAddedMs(ep) : episodeReleaseSortKey(ep);
   }
 
+  // Default sort — clicking whichever button is already active reverts to this.
+  const DEFAULT_PODCAST_SORT = { sortBy: "added", sortDir: "desc" };
+
   function setPodcastSort(by, dir) {
     if (!by) return;
-    state.podcast.sortBy = by === "added" ? "added" : "released";
-    state.podcast.sortDir = dir === "asc" ? "asc" : "desc";
+    const field = by === "added" ? "added" : "released";
+    const direction = dir === "asc" ? "asc" : "desc";
+
+    const isSameAsCurrent = state.podcast.sortBy === field && state.podcast.sortDir === direction;
+    if (isSameAsCurrent) {
+      state.podcast.sortBy = DEFAULT_PODCAST_SORT.sortBy;
+      state.podcast.sortDir = DEFAULT_PODCAST_SORT.sortDir;
+      return;
+    }
+
+    state.podcast.sortBy = field;
+    state.podcast.sortDir = direction;
   }
 
   function comparePodcastEpisodes(a, b) {
@@ -1199,9 +1224,31 @@
       }
 
       state.podcast.items = allEpisodes;
+      logPodcastReleaseDateAudit(allEpisodes);
     } catch (e) {
       state.podcast.error = String(e?.message || e);
     }
+  }
+
+  // Diagnostic only (console, not UI): Spotify's own metadata is missing release_date
+  // for some older/obscure episodes, which is a data gap on Spotify's end, not
+  // something this app can fix. This makes those gaps visible — open devtools,
+  // check the console table, and any row with a blank releaseDate is the culprit.
+  function logPodcastReleaseDateAudit(episodes) {
+    const rows = episodes.map((ep) => ({
+      name: ep?.name || "(untitled)",
+      releaseDate: ep?.releaseDate || null,
+      releaseDatePrecision: ep?.releaseDatePrecision || null,
+      addedAt: ep?.addedAt || null,
+      id: ep?.id || null
+    }));
+
+    // Missing release dates float to the top so they're easy to spot at a glance.
+    rows.sort((a, b) => (a.releaseDate ? 1 : 0) - (b.releaseDate ? 1 : 0));
+
+    const missingCount = rows.filter((r) => !r.releaseDate).length;
+    console.log(`Podcast release-date audit: ${missingCount} of ${rows.length} episodes have no releaseDate from Spotify.`);
+    console.table(rows);
   }
 
   function renderPodcastColumn() {
@@ -1245,8 +1292,15 @@
       return;
     }
   
+    // Sorting by release date is meaningless for episodes with no real year on
+    // record (see episodeReleaseSortKey) — hide them in that mode rather than
+    // letting them sit lumped at the bottom of every release-date sort.
+    if (state.podcast.sortBy === "released") {
+      items = items.filter((ep) => episodeReleaseSortKey(ep) != null);
+    }
+
     items.sort(comparePodcastEpisodes);
-  
+
     errBox.hidden = true;
     head.hidden = false;
   
@@ -1300,6 +1354,10 @@
     const metaIconsHtml = renderPodcastMetaIcons(it);
     const badgeHtml = newBadgeHtml(episodeAddedMs(it));
 
+    const playId = episodeId ? `episode:${episodeId}` : null;
+    const spotifyUri = episodeId ? `spotify:episode:${episodeId}` : null;
+    const playControl = playControlHtml(playId, spotifyUri);
+
     return `
       <li class="podcast-item" data-episode-id="${escapeHtml(episodeId)}">
         <div class="podcast-link-grid">
@@ -1323,6 +1381,7 @@
               ${badgeHtml}
               <div class="podcast-item-actions">
                 ${metaIconsHtml}
+                ${playControl.button}
                 <button
                   class="epnote-bubble"
                   type="button"
@@ -1339,10 +1398,11 @@
             </div>
           </div>
         </div>
-  
+
         ${savedBlock}
         ${statusLine}
         ${editorHtml}
+        ${playControl.progress}
       </li>
     `;
   }
@@ -1799,6 +1859,141 @@
     }
   }
 
+  /***********************
+   * Real Spotify playback (Embed IFrame API)
+   *
+   * This plays the actual track/episode through Spotify's own embedded
+   * player — a genuine play that counts on Spotify when the visitor is
+   * logged in — rather than a local audio clip. `preview_url` is not an
+   * option here: Spotify deprecated it for any API app created after
+   * Nov 27 2024, so it's unavailable to this site regardless.
+   *
+   * One shared, hidden controller (#spotifyEmbedHost, outside #appMain so
+   * it survives every refresh's full re-render) is reused across every
+   * play button on the page via loadUri(), instead of creating a fresh
+   * iframe per track.
+   ***********************/
+  let spotifyEmbedController = null;
+  let spotifyEmbedControllerPromise = null;
+  let activePlayId = null;
+  let activePlayIsPlaying = false;
+
+  function playControlHtml(playId, spotifyUri) {
+    if (!playId || !spotifyUri) return { button: "", progress: "" };
+    return {
+      button: `<button class="play-btn" type="button" data-play-id="${escapeHtml(playId)}" data-play-uri="${escapeHtml(spotifyUri)}" aria-label="Play on Spotify" title="Play on Spotify">▶</button>`,
+      progress: `<div class="play-progress-track" data-play-progress="${escapeHtml(playId)}"><div class="play-progress-fill"></div></div>`
+    };
+  }
+
+  function setPlayButtonVisual(playId, mode) {
+    // mode: "idle" | "loading" | "playing"
+    document.querySelectorAll(`.play-btn[data-play-id="${CSS.escape(playId)}"]`).forEach((btn) => {
+      btn.classList.toggle("is-loading", mode === "loading");
+      btn.classList.toggle("is-playing", mode === "playing");
+      btn.textContent = mode === "playing" ? "⏸" : "▶";
+    });
+  }
+
+  function setPlayProgressFraction(playId, fraction) {
+    const pct = Math.max(0, Math.min(100, fraction * 100));
+    document.querySelectorAll(`[data-play-progress="${CSS.escape(playId)}"] .play-progress-fill`).forEach((el) => {
+      el.style.width = `${pct}%`;
+    });
+  }
+
+  function resetActivePlayUI() {
+    if (!activePlayId) return;
+    setPlayButtonVisual(activePlayId, "idle");
+    setPlayProgressFraction(activePlayId, 0);
+  }
+
+  function handleEmbedPlaybackUpdate(data) {
+    if (!activePlayId || !data) return;
+    const { position, duration, isPaused, isBuffering } = data;
+
+    activePlayIsPlaying = !isPaused;
+    setPlayButtonVisual(activePlayId, isBuffering ? "loading" : (isPaused ? "idle" : "playing"));
+
+    if (typeof duration === "number" && duration > 0) {
+      setPlayProgressFraction(activePlayId, (Number(position) || 0) / duration);
+    }
+
+    // Track finished: snap the bar back to empty instead of leaving it stuck full.
+    if (isPaused && typeof position === "number" && typeof duration === "number" && duration > 0 && position >= duration - 250) {
+      setPlayProgressFraction(activePlayId, 0);
+    }
+  }
+
+  async function getSpotifyEmbedController(initialUri) {
+    if (spotifyEmbedController) return spotifyEmbedController;
+    if (spotifyEmbedControllerPromise) return spotifyEmbedControllerPromise;
+
+    spotifyEmbedControllerPromise = (async () => {
+      if (!window.__spotifyIframeApiPromise) throw new Error("Spotify embed script not loaded");
+      const IFrameAPI = await window.__spotifyIframeApiPromise;
+      const host = document.getElementById("spotifyEmbedHost");
+      if (!host) throw new Error("Missing #spotifyEmbedHost");
+
+      return new Promise((resolve, reject) => {
+        try {
+          IFrameAPI.createController(host, { uri: initialUri, width: "300", height: "80" }, (controller) => {
+            spotifyEmbedController = controller;
+            controller.addListener("playback_update", (e) => handleEmbedPlaybackUpdate(e?.data));
+            resolve(controller);
+          });
+        } catch (err) {
+          reject(err);
+        }
+      });
+    })();
+
+    return spotifyEmbedControllerPromise;
+  }
+
+  async function togglePlay(playId, spotifyUri) {
+    if (!playId || !spotifyUri) return;
+
+    // Same row clicked again: just toggle pause/resume.
+    if (activePlayId === playId && spotifyEmbedController) {
+      if (activePlayIsPlaying) {
+        spotifyEmbedController.pause();
+      } else {
+        spotifyEmbedController.resume();
+      }
+      return;
+    }
+
+    resetActivePlayUI();
+    activePlayId = playId;
+    activePlayIsPlaying = false;
+    setPlayButtonVisual(playId, "loading");
+
+    try {
+      if (!spotifyEmbedController) {
+        await getSpotifyEmbedController(spotifyUri);
+        spotifyEmbedController.play();
+      } else {
+        spotifyEmbedController.loadUri(spotifyUri);
+        spotifyEmbedController.play();
+      }
+    } catch (err) {
+      console.error("Spotify embed playback failed:", err);
+      setPlayButtonVisual(playId, "idle");
+      if (activePlayId === playId) activePlayId = null;
+    }
+  }
+
+  document.addEventListener("click", (e) => {
+    const btn = e.target?.closest?.(".play-btn");
+    if (!btn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const playId = btn.getAttribute("data-play-id");
+    const spotifyUri = btn.getAttribute("data-play-uri");
+    togglePlay(playId, spotifyUri);
+  });
+
   // Tracks still tagged "New" (added within NEW_BADGE_DAYS) float to the top,
   // newest first; everything else keeps the playlist's normal order.
   function sortItemsWithNewFirst(items) {
@@ -1816,6 +2011,12 @@
     const ms = Number(t.durationMs) || 0;
     const mins = ms ? `${Math.round(ms / 60000)}m` : "";
     const badgeHtml = newBadgeHtml(parseSortDate(t.addedAt));
+
+    const trackId = t.id ? String(t.id) : null;
+    const playId = trackId ? `track:${trackId}` : null;
+    const spotifyUri = trackId ? `spotify:track:${trackId}` : null;
+    const playControl = playControlHtml(playId, spotifyUri);
+
     return `
       <li class="track">
         <div class="track-main">
@@ -1825,7 +2026,11 @@
           </div>
           <div class="track-meta">${artists}</div>
         </div>
-        <div class="track-right">${escapeHtml(mins)}</div>
+        <div class="track-right">
+          ${playControl.button}
+          ${escapeHtml(mins)}
+        </div>
+        ${playControl.progress}
       </li>
     `;
   }
