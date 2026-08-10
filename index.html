@@ -27,6 +27,14 @@
   <meta name="subject" content="Spotify Playlists and Podcast Browser">
   <link rel="icon" type="image/png" href="https://spotify.jdge.cc/images/playlists_icon.png">
   <link rel="stylesheet" href="styles.css">
+  <script>
+    // Registered before the async SDK script below so there's no race on load order;
+    // script.js awaits this promise whenever it needs the IFrame API.
+    window.__spotifyIframeApiPromise = new Promise((resolve) => {
+      window.onSpotifyIframeApiReady = (IFrameAPI) => resolve(IFrameAPI);
+    });
+  </script>
+  <script src="https://open.spotify.com/embed/iframe-api/v1" async></script>
   <script src="script.js" defer></script>
   <meta name="ahrefs-site-verification" content="10aa2570e946ca9e322eabb1533c51d3197e4e484ee12f2066a7b91688af232c">
 </head>
@@ -40,12 +48,15 @@
       </div>
 
       <div class="refresh-control">
-        <button id="refreshButton" class="primary-button" type="button">
-          <span class="button-label-default">Refresh from Spotify</span>
-          <span class="button-label-loading">Refreshing…</span>
-        </button>
-        <div class="refresh-progress" id="refreshProgress" aria-hidden="true">
-          <div class="refresh-progress-bar" id="refreshProgressBar"></div>
+        <div class="refresh-control-row">
+          <span class="refresh-progress-label" id="refreshProgressLabel" hidden>Pulling live data from Spotify…</span>
+          <div class="refresh-progress" id="refreshProgress" aria-hidden="true">
+            <div class="refresh-progress-bar" id="refreshProgressBar"></div>
+          </div>
+          <button id="refreshButton" class="primary-button" type="button">
+            <span class="button-label-default">Refresh from Spotify</span>
+            <span class="button-label-loading">Refreshing…</span>
+          </button>
         </div>
       </div>
     </div>
@@ -53,10 +64,15 @@
 
   <main id="appMain"></main>
 
+  <!-- Real Spotify playback (counts as an actual play), controlled entirely via JS.
+       Lives outside #appMain so it survives every refresh's full re-render. -->
+  <div id="spotifyEmbedHost" aria-hidden="true"></div>
+
   <footer>
     <div class="container-footer">
       <p class="footer-left">
         Live data pulled from Spotify Web API via Cloudflare Pages Functions - <a href="https://github.com/megzjudge/spotify" target="_blank" rel="noopener noreferrer">Github</a>.
+        Any song played on this website is recorded as a play on public Spotify.
       </p>
       <a class="footer-button" href="https://spotify.jdge.cc/api/auth/start" title="Mint a new Spotify refresh token">Token</a>
       <p class="footer-copy">© Megan Judge</p>

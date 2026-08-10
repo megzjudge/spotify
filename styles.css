@@ -163,7 +163,20 @@ header h1 {
 .refresh-control {
   display: flex;
   align-items: center;
+}
+
+.refresh-control-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
   gap: 10px;
+}
+
+.refresh-progress-label {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  white-space: nowrap;
 }
 
 /* Fills over ~26s (Spotify sync usually takes 20-30s) so the wait feels bounded;
@@ -947,6 +960,7 @@ main {
 }
 
 .podcast-item{
+  position: relative;
   display: block;
   flex: 0 0 auto;
   min-height: var(--podRowMinH);
@@ -1321,7 +1335,19 @@ detail-sub {
   margin: 0;
 }
 
+#spotifyEmbedHost {
+  position: fixed;
+  left: -9999px;
+  top: -9999px;
+  width: 300px;
+  height: 80px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .track {
+  position: relative;
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 10px;
@@ -1354,10 +1380,69 @@ detail-sub {
 }
 
 .track-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   color: var(--muted2);
   font-size: 12.5px;
   white-space: nowrap;
   align-self: start;
+}
+
+/* Real Spotify playback via the Embed IFrame API — plays the actual track
+   through Spotify (counts as a genuine play when the visitor is logged in),
+   not a fake/local clip. */
+.play-btn {
+  appearance: none;
+  flex-shrink: 0;
+  border: 1px solid rgba(255,255,255,0.06);
+  background: rgba(0,0,0,0.10);
+  color: rgba(255,255,255,0.92);
+  border-radius: 8px;
+  width: 24px;
+  height: 24px;
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.08s ease-out, border-color 0.12s ease-out, background 0.12s ease-out, color 0.12s ease-out;
+}
+
+.play-btn:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255,255,255,0.12);
+  background: rgba(0,0,0,0.16);
+}
+
+.play-btn.is-playing {
+  color: var(--spotify-green);
+  border-color: rgba(29,185,84,0.35);
+  background: rgba(29,185,84,0.10);
+}
+
+.play-btn.is-loading {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* Thin progress line along the row's own bottom edge — no numbers, just
+   real elapsed/total position from the embed's playback_update event. */
+.play-progress-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.play-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #1db954, #19a34a);
 }
 
 /* =========================
@@ -1501,6 +1586,10 @@ footer {
   }
 
   .refresh-control {
+    align-items: stretch;
+  }
+
+  .refresh-control-row {
     flex-direction: column;
     align-items: stretch;
   }
