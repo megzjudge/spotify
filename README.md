@@ -6,7 +6,7 @@ A personal, live-updating browser for Spotify playlists and podcast episodes. Th
 
 - Pulls a curated view of your Spotify library live - pulled easily from the [Spotify Web API](https://developer.spotify.com/documentation/web-api), with playlists grouped into sections (Daily Mix, Top, etc), a podcast episodes playlist, and a set of highlighted "created by others" playlists.
 - Shows headline totals: number of playlists, total songs, and an approximate listening time. Exact per-playlist durations are computed on demand.
-- Lets you open a playlist and list its tracks and podcast episodes, with episodes enriched by release date and artwork for reliable sorting.
+- Lets you open a playlist and list its tracks and podcast episodes — episode titles link straight to the episode on Spotify, and episodes are enriched by release date and artwork so they can be sorted by date added or date released. Shows that Spotify mirrors from elsewhere (e.g. YouTube channels re-published as podcasts) sometimes report a release date that's really just a re-sync timestamp rather than the true publish date; episodes where that's detectably wrong (release date after the date it was added to the playlist) are left out of release-date sorting rather than showing a bogus date.
 - Supports **timestamped notes per podcast episode**, saved back into the repo so they persist and are versioned.
 - Keeps a short list of **external video links** (with auto-fetched title and thumbnail), capped to the most recent few.
 
