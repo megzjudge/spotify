@@ -1317,7 +1317,6 @@
     list.innerHTML = items.map(renderPodcastItem).join("");
     wirePodcastInteractions(list);
     wirePodcastThumbFallbacks(list);
-    syncVolumeKnobUI();
   }
 
   function renderPodcastItem(it) {
@@ -1383,7 +1382,6 @@
               <div class="podcast-item-actions">
                 ${metaIconsHtml}
                 ${playControl.button}
-                ${playControl.knob}
                 <button
                   class="epnote-bubble"
                   type="button"
@@ -1848,7 +1846,6 @@
       detailSub.textContent = bits.join(" • ");
 
       tracklist.innerHTML = sortItemsWithNewFirst(items).map(renderTrack).join("");
-      syncVolumeKnobUI();
       setStatus("");
     } catch (err) {
       console.error(err);
@@ -1882,15 +1879,10 @@
   let activePlayIsPlaying = false;
 
   function playControlHtml(playId, spotifyUri) {
-    if (!playId || !spotifyUri) return { button: "", progress: "", knob: "" };
+    if (!playId || !spotifyUri) return { button: "", progress: "" };
     return {
       button: `<button class="play-btn" type="button" data-play-id="${escapeHtml(playId)}" data-play-uri="${escapeHtml(spotifyUri)}" aria-label="Play on Spotify" title="Play on Spotify">▶</button>`,
-      progress: `<div class="play-progress-track" data-play-progress="${escapeHtml(playId)}"><div class="play-progress-fill"></div></div>`,
-      knob: `<div class="volume-knob" data-play-volume="${escapeHtml(playId)}" role="slider" tabindex="0" aria-label="Volume" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100" title="Drag to adjust volume">
-        <div class="volume-knob-ring"></div>
-        <div class="volume-knob-face"></div>
-        <div class="volume-knob-handle"></div>
-      </div>`
+      progress: `<div class="play-progress-track" data-play-progress="${escapeHtml(playId)}"><div class="play-progress-fill"></div></div>`
     };
   }
 
@@ -1915,85 +1907,6 @@
     setPlayButtonVisual(activePlayId, "idle");
     setPlayProgressFraction(activePlayId, 0);
   }
-
-  /***********************
-   * Volume knob — one shared embed player means one shared volume. The
-   * knob sweeps 270° (like a physical pot/CD-player dial) with a dead
-   * zone at the bottom; angle 0 = 12 o'clock, clockwise-positive.
-   ***********************/
-  const VOLUME_MIN_DEG = -135;
-  const VOLUME_MAX_DEG = 135;
-  let currentVolume = 1;
-  let draggingVolumeKnob = null;
-
-  function volumeToAngle(v) {
-    return VOLUME_MIN_DEG + Math.max(0, Math.min(1, v)) * (VOLUME_MAX_DEG - VOLUME_MIN_DEG);
-  }
-
-  function angleFromPointer(knobEl, clientX, clientY) {
-    const rect = knobEl.getBoundingClientRect();
-    const cx = rect.left + rect.width / 2;
-    const cy = rect.top + rect.height / 2;
-    const deg = Math.atan2(clientX - cx, cy - clientY) * (180 / Math.PI);
-    return Math.max(VOLUME_MIN_DEG, Math.min(VOLUME_MAX_DEG, deg));
-  }
-
-  function applyVolumeVisual(volume) {
-    const angle = volumeToAngle(volume);
-    const fillDeg = angle - VOLUME_MIN_DEG;
-    document.querySelectorAll(".volume-knob").forEach((el) => {
-      el.style.setProperty("--vk-angle", `${angle}deg`);
-      el.style.setProperty("--vk-fill", `${fillDeg}deg`);
-      el.setAttribute("aria-valuenow", String(Math.round(volume * 100)));
-    });
-  }
-
-  function setVolume(volume) {
-    currentVolume = Math.max(0, Math.min(1, volume));
-    applyVolumeVisual(currentVolume);
-    if (spotifyEmbedController) {
-      try { spotifyEmbedController.setVolume(currentVolume); } catch (err) { console.error("Spotify embed setVolume failed:", err); }
-    }
-  }
-
-  function setVolumeKnobVisible(playId) {
-    document.querySelectorAll(".volume-knob").forEach((el) => {
-      el.classList.toggle("is-active", playId != null && el.getAttribute("data-play-volume") === playId);
-    });
-  }
-
-  function syncVolumeKnobUI() {
-    setVolumeKnobVisible(activePlayId);
-    applyVolumeVisual(currentVolume);
-  }
-
-  function handleVolumePointerMove(e) {
-    if (!draggingVolumeKnob) return;
-    const deg = angleFromPointer(draggingVolumeKnob, e.clientX, e.clientY);
-    setVolume((deg - VOLUME_MIN_DEG) / (VOLUME_MAX_DEG - VOLUME_MIN_DEG));
-  }
-
-  function handleVolumePointerUp() {
-    draggingVolumeKnob = null;
-    document.removeEventListener("pointermove", handleVolumePointerMove);
-    document.removeEventListener("pointerup", handleVolumePointerUp);
-  }
-
-  document.addEventListener("pointerdown", (e) => {
-    const knob = e.target?.closest?.(".volume-knob");
-    if (!knob || !knob.classList.contains("is-active")) return;
-    e.preventDefault();
-    draggingVolumeKnob = knob;
-    handleVolumePointerMove(e);
-    document.addEventListener("pointermove", handleVolumePointerMove);
-    document.addEventListener("pointerup", handleVolumePointerUp, { once: true });
-  });
-
-  document.addEventListener("keydown", (e) => {
-    if (!e.target?.classList?.contains("volume-knob")) return;
-    if (e.key === "ArrowUp" || e.key === "ArrowRight") { e.preventDefault(); setVolume(currentVolume + 0.05); }
-    else if (e.key === "ArrowDown" || e.key === "ArrowLeft") { e.preventDefault(); setVolume(currentVolume - 0.05); }
-  });
 
   function handleEmbedPlaybackUpdate(data) {
     if (!activePlayId || !data) return;
@@ -2055,8 +1968,6 @@
     activePlayId = playId;
     activePlayIsPlaying = false;
     setPlayButtonVisual(playId, "loading");
-    setVolumeKnobVisible(playId);
-    applyVolumeVisual(currentVolume);
 
     try {
       if (!spotifyEmbedController) {
@@ -2066,11 +1977,9 @@
         spotifyEmbedController.loadUri(spotifyUri);
         spotifyEmbedController.play();
       }
-      try { spotifyEmbedController.setVolume(currentVolume); } catch (volErr) { console.error("Spotify embed setVolume failed:", volErr); }
     } catch (err) {
       console.error("Spotify embed playback failed:", err);
       setPlayButtonVisual(playId, "idle");
-      setVolumeKnobVisible(null);
       if (activePlayId === playId) activePlayId = null;
     }
   }
@@ -2119,7 +2028,6 @@
         </div>
         <div class="track-right">
           ${playControl.button}
-          ${playControl.knob}
           ${escapeHtml(mins)}
         </div>
         ${playControl.progress}
