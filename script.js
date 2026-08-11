@@ -2066,7 +2066,7 @@
         spotifyEmbedController.loadUri(spotifyUri);
         spotifyEmbedController.play();
       }
-      spotifyEmbedController.setVolume(currentVolume);
+      try { spotifyEmbedController.setVolume(currentVolume); } catch (volErr) { console.error("Spotify embed setVolume failed:", volErr); }
     } catch (err) {
       console.error("Spotify embed playback failed:", err);
       setPlayButtonVisual(playId, "idle");
