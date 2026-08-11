@@ -542,6 +542,16 @@
       if (!d) d = 1;
     }
 
+    // Some shows (mirrored video podcasts — After Skool, Wendover Productions,
+    // etc.) get a release_date from Spotify that's really a re-sync/ingestion
+    // date rather than the true original publish date. That shows up as a
+    // release date AFTER the episode was added to the playlist, which is
+    // impossible for a real release. Treat that contradiction the same as
+    // "no real date" instead of sorting it as if it just came out.
+    const releaseMs = Date.UTC(y, m - 1, d);
+    const addedMs = episodeAddedMs(ep);
+    if (addedMs && releaseMs > addedMs) return null;
+
     return (y * 10000) + (m * 100) + d;
   }
 
@@ -1377,7 +1387,7 @@
 
           <div class="podcast-ep-meta">
             <div class="podcast-item-head">
-              <div class="podcast-item-title">${name}</div>
+              <a class="podcast-item-title" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${name}</a>
               ${badgeHtml}
             </div>
 

@@ -1011,6 +1011,11 @@ main {
   flex: 1;
   min-width: 0;
   text-align: left;
+  text-decoration: none;
+}
+
+.podcast-item-title:hover {
+  text-decoration: underline;
 }
 
 .new-badge {
