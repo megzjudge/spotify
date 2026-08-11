@@ -1868,10 +1868,11 @@
    * option here: Spotify deprecated it for any API app created after
    * Nov 27 2024, so it's unavailable to this site regardless.
    *
-   * One shared, hidden controller (#spotifyEmbedHost, outside #appMain so
-   * it survives every refresh's full re-render) is reused across every
-   * play button on the page via loadUri(), instead of creating a fresh
-   * iframe per track.
+   * One shared controller (#spotifyEmbedHost, outside #appMain so it
+   * survives every refresh's full re-render) is reused across every play
+   * button on the page via loadUri(), instead of creating a fresh iframe
+   * per track. It surfaces in a centered popup (#spotifyPopupBackdrop)
+   * whenever something is playing.
    ***********************/
   let spotifyEmbedController = null;
   let spotifyEmbedControllerPromise = null;
@@ -1908,6 +1909,41 @@
     setPlayProgressFraction(activePlayId, 0);
   }
 
+  function showSpotifyPopup() {
+    const backdrop = document.getElementById("spotifyPopupBackdrop");
+    if (backdrop) {
+      backdrop.classList.add("is-active");
+      backdrop.setAttribute("aria-hidden", "false");
+    }
+  }
+
+  function hideSpotifyPopup() {
+    const backdrop = document.getElementById("spotifyPopupBackdrop");
+    if (backdrop) {
+      backdrop.classList.remove("is-active");
+      backdrop.setAttribute("aria-hidden", "true");
+    }
+  }
+
+  function closeSpotifyPopup() {
+    if (spotifyEmbedController) {
+      try { spotifyEmbedController.pause(); } catch (err) { console.error("Spotify embed pause failed:", err); }
+    }
+    hideSpotifyPopup();
+  }
+
+  const spotifyPopupBackdrop = document.getElementById("spotifyPopupBackdrop");
+  const spotifyPopupClose = document.getElementById("spotifyPopupClose");
+  if (spotifyPopupClose) spotifyPopupClose.addEventListener("click", closeSpotifyPopup);
+  if (spotifyPopupBackdrop) {
+    spotifyPopupBackdrop.addEventListener("click", (e) => {
+      if (e.target === spotifyPopupBackdrop) closeSpotifyPopup();
+    });
+  }
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeSpotifyPopup();
+  });
+
   function handleEmbedPlaybackUpdate(data) {
     if (!activePlayId || !data) return;
     const { position, duration, isPaused, isBuffering } = data;
@@ -1937,7 +1973,7 @@
 
       return new Promise((resolve, reject) => {
         try {
-          IFrameAPI.createController(host, { uri: initialUri, width: "300", height: "80" }, (controller) => {
+          IFrameAPI.createController(host, { uri: initialUri, width: "100%", height: "152" }, (controller) => {
             spotifyEmbedController = controller;
             controller.addListener("playback_update", (e) => handleEmbedPlaybackUpdate(e?.data));
             resolve(controller);
@@ -1960,6 +1996,7 @@
         spotifyEmbedController.pause();
       } else {
         spotifyEmbedController.resume();
+        showSpotifyPopup();
       }
       return;
     }
@@ -1968,6 +2005,7 @@
     activePlayId = playId;
     activePlayIsPlaying = false;
     setPlayButtonVisual(playId, "loading");
+    showSpotifyPopup();
 
     try {
       if (!spotifyEmbedController) {
@@ -1980,6 +2018,7 @@
     } catch (err) {
       console.error("Spotify embed playback failed:", err);
       setPlayButtonVisual(playId, "idle");
+      hideSpotifyPopup();
       if (activePlayId === playId) activePlayId = null;
     }
   }

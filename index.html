@@ -66,7 +66,12 @@
 
   <!-- Real Spotify playback (counts as an actual play), controlled entirely via JS.
        Lives outside #appMain so it survives every refresh's full re-render. -->
-  <div id="spotifyEmbedHost" aria-hidden="true"></div>
+  <div class="spotify-popup-backdrop" id="spotifyPopupBackdrop" aria-hidden="true">
+    <div class="spotify-popup">
+      <button class="spotify-popup-close" id="spotifyPopupClose" type="button" aria-label="Close player">✕</button>
+      <div id="spotifyEmbedHost"></div>
+    </div>
+  </div>
 
   <footer>
     <div class="container-footer">

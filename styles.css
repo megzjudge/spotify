@@ -1335,15 +1335,59 @@ detail-sub {
   margin: 0;
 }
 
-#spotifyEmbedHost {
+/* Real Spotify playback popup — centered, above everything (including the
+   playlist modal, z-index 50), shown while a track/episode is active. */
+.spotify-popup-backdrop {
   position: fixed;
-  left: -9999px;
-  top: -9999px;
-  width: 300px;
-  height: 80px;
+  inset: 0;
+  background: rgba(0,0,0,0.62);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  z-index: 200;
+}
+
+.spotify-popup-backdrop.is-active {
+  display: flex;
+}
+
+.spotify-popup {
+  position: relative;
+  width: min(320px, 100%);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--stroke);
+  background: rgba(14, 20, 24, 0.96);
+  box-shadow: var(--shadow);
+  padding: 20px;
+}
+
+.spotify-popup-close {
+  position: absolute;
+  top: -14px;
+  right: -14px;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid var(--stroke);
+  background: rgba(14, 20, 24, 0.96);
+  color: rgba(255,255,255,0.85);
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.spotify-popup-close:hover {
+  background: rgba(0,0,0,0.6);
+}
+
+#spotifyEmbedHost {
+  width: 100%;
+  height: 152px;
+  border-radius: 12px;
   overflow: hidden;
-  opacity: 0;
-  pointer-events: none;
 }
 
 .track {
