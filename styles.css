@@ -1008,10 +1008,6 @@ main {
   font-size: 13.5px;
   color: rgba(255,255,255,0.90);
   line-height: 1.2;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
   flex: 1;
   min-width: 0;
   text-align: left;
@@ -1037,10 +1033,18 @@ main {
   margin-top: 6px;
   color: var(--muted2);
   font-size: 12px;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.podcast-item-sub-text {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  text-align: left;
+  min-width: 0;
 }
 
 /* =========================

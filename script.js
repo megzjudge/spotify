@@ -1379,6 +1379,10 @@
             <div class="podcast-item-head">
               <div class="podcast-item-title">${name}</div>
               ${badgeHtml}
+            </div>
+
+            <div class="podcast-item-sub">
+              <span class="podcast-item-sub-text">${channel ? `${channel} • ` : ""}${escapeHtml(dur)}</span>
               <div class="podcast-item-actions">
                 ${metaIconsHtml}
                 ${playControl.button}
@@ -1391,10 +1395,6 @@
                   style="opacity:${noteOpacity}"
                 >💭</button>
               </div>
-            </div>
-
-            <div class="podcast-item-sub">
-              ${channel ? `${channel} • ` : ""}${escapeHtml(dur)}
             </div>
           </div>
         </div>
