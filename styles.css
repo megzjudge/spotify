@@ -1354,12 +1354,12 @@ detail-sub {
 
 .spotify-popup {
   position: relative;
-  width: min(320px, 100%);
+  width: min(400px, 100%);
   border-radius: var(--radius-lg);
   border: 1px solid var(--stroke);
   background: rgba(14, 20, 24, 0.96);
   box-shadow: var(--shadow);
-  padding: 20px;
+  padding: 16px;
 }
 
 .spotify-popup-close {
@@ -1387,6 +1387,17 @@ detail-sub {
   width: 100%;
   height: 152px;
   border-radius: 12px;
+  overflow: hidden;
+}
+
+/* Spotify's IFrame API sets width/height as attributes on its own iframe,
+   which can leave the embedded document's native scrollbars visible when
+   it renders a fixed-size card (e.g. the "Get Spotify" upsell) inside a
+   wider/taller host. Force the iframe itself to fill the host and hide
+   its own scrollbars. */
+#spotifyEmbedHost iframe {
+  width: 100% !important;
+  height: 100% !important;
   overflow: hidden;
 }
 
@@ -1694,5 +1705,16 @@ footer {
 
   .epnote-saved-line {
     grid-template-columns: 76px 1fr;
+  }
+
+  /* Spotify's own embed layout needs ~300px+ of width to lay itself out
+     without falling back to internal scrollbars — claim back every spare
+     pixel of padding on narrow screens so it stays above that floor. */
+  .spotify-popup-backdrop {
+    padding: 8px;
+  }
+
+  .spotify-popup {
+    padding: 10px;
   }
 }
