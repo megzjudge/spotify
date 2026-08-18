@@ -30,8 +30,8 @@ export async function onRequestGet({ env, request }) {
     // ✅ NEW: bulk mode (single file read, returns full note text for every
     // episode that has any) — powers the podcast search bar's notes search
     // without a per-episode round trip for each keystroke.
-    const all = String(url.searchParams.get("all") || "").trim() === "1";
-    if (all) {
+    const bulk = String(url.searchParams.get("all") || "").trim() === "1";
+    if (bulk) {
       const cfg = getGithubConfig(env);
       const file = await githubReadJson(cfg, { allowMissing: true });
       const allData = (file.data && typeof file.data === "object") ? file.data : {};
