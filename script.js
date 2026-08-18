@@ -644,8 +644,8 @@
 
     return `
       <span class="pod-meta-emoji" tabindex="0" role="img" aria-label="${escapeHtml(addedTip)}" title="${escapeHtml(addedTip)}" data-tip="${escapeHtml(addedTip)}">➕</span>
-      ${editBtn}
       <span class="pod-meta-emoji" tabindex="0" role="img" aria-label="${escapeHtml(releasedTip)}" title="${escapeHtml(releasedTip)}" data-tip="${escapeHtml(releasedTip)}">📅</span>
+      ${editBtn}
     `;
   }
 

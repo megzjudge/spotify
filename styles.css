@@ -481,6 +481,7 @@ main {
   font-size: 13px;
   flex-shrink: 0;
   opacity: 1;
+  color: rgba(255,255,255,0.92);
   transition: background 0.12s ease-out, transform 0.08s ease-out;
 }
 
