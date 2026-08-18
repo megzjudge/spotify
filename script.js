@@ -7,6 +7,7 @@
   const API_REFRESH = "/api/refresh";
   const API_PLAYLIST = "/api/playlist";
   const API_EPISODE_NOTE = "/api/episode-note";
+  const API_EPISODE_DATE = "/api/episode-date";
 
   // ✅ IMPORTANT:
   // /api/song-hours does NOT exist as a Pages Function right now (GET falls back to HTML, POST is 405).
@@ -78,7 +79,16 @@
       cache: Object.create(null),
       openEpisodeId: null,
       openMode: null,
-      episodesWithNotes: new Set()
+      episodesWithNotes: new Set(),
+      // episodeId -> combined note text, bulk-loaded so the search bar can
+      // match against notes the user hasn't opened yet in this session.
+      allNotesText: Object.create(null)
+    },
+
+    // Manual release-date corrections (episodeId -> { releaseDate, releaseDatePrecision }),
+    // applied on top of whatever Spotify reports. See applyPodcastDateOverrides.
+    episodeDates: {
+      overrides: Object.create(null)
     }
   };
 
@@ -278,6 +288,17 @@
                 <div class="podcast-sub" id="podcastSub"></div>
               </div>
               <div id="podcastHeadControls" aria-hidden="false"></div>
+            </div>
+
+            <div class="podcast-search-wrap">
+              <input
+                type="search"
+                id="podcastSearchInput"
+                class="podcast-search-input"
+                placeholder="Search creator, date (e.g. 2023, 2023-06, 2023-06-15), or notes…"
+                autocomplete="off"
+                spellcheck="false"
+              >
             </div>
 
             <div class="podcast-empty" id="podcastEmpty"></div>
@@ -612,12 +633,19 @@
     const releasePrecision = it?.releaseDatePrecision ?? it?.release_date_precision ?? "day";
     const releasedLabel = fmtEpisodeDisplayDate(releaseRaw, releasePrecision);
     const addedLabel = fmtEpisodeAddedDisplayDate(it);
-    const releasedTip = `Released: ${releasedLabel}`;
+    const isOverridden = !!it?.releaseDateOverridden;
+    const releasedTip = `Released: ${releasedLabel}${isOverridden ? " (manually corrected)" : ""}`;
     const addedTip = `Added: ${addedLabel}`;
+    const episodeId = String(it?.id || "").trim();
+
+    const editBtn = episodeId
+      ? `<button type="button" class="pod-date-edit${isOverridden ? " is-overridden" : ""}" title="Correct release date" aria-label="Correct release date" data-epdate-edit="${escapeHtml(episodeId)}">✏️</button>`
+      : "";
 
     return `
       <span class="pod-meta-emoji" tabindex="0" role="img" aria-label="${escapeHtml(addedTip)}" title="${escapeHtml(addedTip)}" data-tip="${escapeHtml(addedTip)}">➕</span>
       <span class="pod-meta-emoji" tabindex="0" role="img" aria-label="${escapeHtml(releasedTip)}" title="${escapeHtml(releasedTip)}" data-tip="${escapeHtml(releasedTip)}">📅</span>
+      ${editBtn}
     `;
   }
 
@@ -688,6 +716,121 @@
       setPodcastSort(btn.getAttribute("data-sort"), btn.getAttribute("data-dir"));
       renderPodcastColumn();
     });
+  }
+
+  /***********************
+   * Podcast search (creator / date / cloud notes)
+   ***********************/
+  function wirePodcastSearch() {
+    const input = document.getElementById("podcastSearchInput");
+    if (!input || input.__searchBound) return;
+    input.__searchBound = true;
+    input.addEventListener("input", () => renderPodcastColumn());
+  }
+
+  // Parses date-ish queries into { year, month, day } (month/day null when not
+  // given). Accepts "2023", "2023-06", "2023-06-15", "2023/06/15", "2023 06 15",
+  // and the run-together forms "202306" / "20230615". Returns null if the query
+  // isn't date-shaped at all, so callers fall through to text matching.
+  function parsePodcastDateQuery(q) {
+    const trimmed = String(q || "").trim();
+    if (!trimmed || !/^[\d\s./-]+$/.test(trimmed)) return null;
+
+    const parts = trimmed.split(/[\s./-]+/).filter(Boolean);
+    let year = null, month = null, day = null;
+
+    if (parts.length === 1) {
+      const digits = parts[0];
+      if (digits.length === 4) {
+        year = Number(digits);
+      } else if (digits.length === 6) {
+        year = Number(digits.slice(0, 4));
+        month = Number(digits.slice(4, 6));
+      } else if (digits.length === 8) {
+        year = Number(digits.slice(0, 4));
+        month = Number(digits.slice(4, 6));
+        day = Number(digits.slice(6, 8));
+      } else {
+        return null;
+      }
+    } else if (parts.length === 2 && parts[0].length === 4) {
+      year = Number(parts[0]);
+      month = Number(parts[1]);
+    } else if (parts.length === 3 && parts[0].length === 4) {
+      year = Number(parts[0]);
+      month = Number(parts[1]);
+      day = Number(parts[2]);
+    } else {
+      return null;
+    }
+
+    if (!year || year < 1000) return null;
+    if (month != null && (month < 1 || month > 12)) return null;
+    if (day != null && (day < 1 || day > 31)) return null;
+
+    return { year, month: month || null, day: day || null };
+  }
+
+  function episodeReleaseDateParts(ep) {
+    const raw = ep?.releaseDate ?? ep?.release_date;
+    if (!raw) return null;
+    const precision = ep?.releaseDatePrecision ?? ep?.release_date_precision ?? "day";
+    const parts = String(raw).trim().split("-");
+    const y = Number(parts[0]) || 0;
+    if (!y) return null;
+    let m = parts[1] ? Number(parts[1]) : null;
+    let d = parts[2] ? Number(parts[2]) : null;
+    if (precision === "year") { m = null; d = null; }
+    else if (precision === "month") { d = null; }
+    return { y, m, d };
+  }
+
+  function episodeAddedDateParts(ep) {
+    const ms = episodeAddedMs(ep);
+    if (!ms) return null;
+    const dt = new Date(ms);
+    return { y: dt.getFullYear(), m: dt.getMonth() + 1, d: dt.getDate() };
+  }
+
+  function dateStructMatchesQuery(parts, parsed) {
+    if (!parts || parts.y !== parsed.year) return false;
+    if (parsed.month != null && parts.m !== parsed.month) return false;
+    if (parsed.day != null && parts.d !== parsed.day) return false;
+    return true;
+  }
+
+  function episodeDateMatchesQuery(ep, parsed) {
+    if (!parsed) return false;
+    return dateStructMatchesQuery(episodeReleaseDateParts(ep), parsed)
+      || dateStructMatchesQuery(episodeAddedDateParts(ep), parsed);
+  }
+
+  // Prefers the fully-loaded per-episode cache (populated once someone opens
+  // that episode's notes) and falls back to the bulk-loaded text.
+  function episodeNotesSearchText(episodeId) {
+    if (!episodeId) return "";
+    const entry = state.episodeNotes.cache?.[episodeId];
+    if (entry?.loadedSaved && Array.isArray(entry.savedNotes)) {
+      return entry.savedNotes.map((n) => n?.text || "").join(" ");
+    }
+    return state.episodeNotes.allNotesText[episodeId] || "";
+  }
+
+  function podcastEpisodeMatchesSearch(ep, rawQuery) {
+    const q = String(rawQuery || "").trim().toLowerCase();
+    if (!q) return true;
+
+    const creator = (ep.artists || []).join(" ").toLowerCase();
+    if (creator.includes(q)) return true;
+
+    const parsedDate = parsePodcastDateQuery(q);
+    if (parsedDate && episodeDateMatchesQuery(ep, parsedDate)) return true;
+
+    const episodeId = String(ep?.id || "").trim();
+    const notesText = episodeNotesSearchText(episodeId).toLowerCase();
+    if (notesText.includes(q)) return true;
+
+    return false;
   }
 
   function renderFilterPills() {
@@ -906,6 +1049,146 @@
     } catch (e) {
       console.warn("Episode notes summary fetch error:", e);
       state.episodeNotes.episodesWithNotes = new Set();
+    }
+  }
+
+  // Bulk-loads all saved note text (not just which episodes have notes) so the
+  // podcast search bar can match cloud notes the user hasn't opened yet.
+  async function loadAllEpisodeNotesText() {
+    try {
+      const res = await fetch(`${API_EPISODE_NOTE}?all=1`, {
+        method: "GET",
+        headers: { Accept: "application/json" }
+      });
+
+      const text = await res.text();
+      let data = null;
+      try { data = text ? JSON.parse(text) : null; } catch {}
+
+      if (!res.ok) {
+        console.warn("Episode notes bulk fetch failed:", res.status, data || text);
+        return;
+      }
+
+      const notesByEpisode = (data?.notes && typeof data.notes === "object") ? data.notes : {};
+      const out = Object.create(null);
+      for (const [episodeId, rows] of Object.entries(notesByEpisode)) {
+        if (!episodeId || !Array.isArray(rows)) continue;
+        out[episodeId] = rows.map((r) => r?.text || "").join(" ");
+      }
+      state.episodeNotes.allNotesText = out;
+    } catch (e) {
+      console.warn("Episode notes bulk fetch error:", e);
+    }
+  }
+
+  /***********************
+   * Episode date overrides
+   ***********************/
+  async function loadEpisodeDateOverrides() {
+    try {
+      const res = await fetch(API_EPISODE_DATE, {
+        method: "GET",
+        headers: { Accept: "application/json" }
+      });
+
+      const text = await res.text();
+      let data = null;
+      try { data = text ? JSON.parse(text) : null; } catch {}
+
+      if (!res.ok) {
+        console.warn("Episode date overrides fetch failed:", res.status, data || text);
+        return;
+      }
+
+      const overrides = (data?.overrides && typeof data.overrides === "object") ? data.overrides : {};
+      state.episodeDates.overrides = overrides;
+    } catch (e) {
+      console.warn("Episode date overrides fetch error:", e);
+    }
+  }
+
+  // Merges manual overrides on top of state.podcast.items so every other piece
+  // of code (sorting, display formatting, search) keeps reading ep.releaseDate /
+  // ep.releaseDatePrecision as usual, unaware an override even happened.
+  function applyPodcastDateOverrides() {
+    const overrides = state.episodeDates.overrides || {};
+    state.podcast.items = (state.podcast.items || []).map((ep) => {
+      const id = String(ep?.id || "").trim();
+      const ov = id ? overrides[id] : null;
+      if (!ov || !ov.releaseDate) return ep;
+      return {
+        ...ep,
+        releaseDate: ov.releaseDate,
+        releaseDatePrecision: ov.releaseDatePrecision || "day",
+        releaseDateOverridden: true
+      };
+    });
+  }
+
+  async function saveEpisodeDateOverride(episodeId, releaseDate, releaseDatePrecision, authToken) {
+    const res = await fetch(API_EPISODE_DATE, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "X-Auth": String(authToken || "")
+      },
+      body: JSON.stringify({ episodeId, releaseDate: releaseDate || "", releaseDatePrecision: releaseDatePrecision || "" })
+    });
+
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch {}
+
+    if (!res.ok) {
+      const msg = (data && (data.error || data.message)) || text || `HTTP ${res.status}`;
+      if (res.status === 401 || res.status === 403) setNotesAuthToken("");
+      throw new Error(msg);
+    }
+
+    if (releaseDate) {
+      state.episodeDates.overrides[episodeId] = data?.override || { releaseDate, releaseDatePrecision: releaseDatePrecision || "day" };
+    } else {
+      delete state.episodeDates.overrides[episodeId];
+    }
+  }
+
+  // Lightweight prompt-based editor — mirrors the password gate already used
+  // for notes (ensureNotesAuthOrThrow) rather than building a whole new modal.
+  async function handleEditReleaseDateClick(episodeId, ep) {
+    if (!episodeId) return;
+
+    const current = ep?.releaseDate || "";
+    const raw = window.prompt(
+      "Set release date as YYYY-MM-DD, YYYY-MM, or YYYY.\nLeave blank and OK to clear the override and use Spotify's date.",
+      current
+    );
+    if (raw === null) return; // cancelled
+
+    const trimmed = raw.trim();
+    if (trimmed && !/^\d{4}(-\d{2}(-\d{2})?)?$/.test(trimmed)) {
+      window.alert("Please use YYYY, YYYY-MM, or YYYY-MM-DD.");
+      return;
+    }
+
+    let authToken = "";
+    try {
+      authToken = ensureNotesAuthOrThrow();
+    } catch (err) {
+      window.alert(String(err?.message || err));
+      return;
+    }
+
+    const parts = trimmed.split("-");
+    const precision = trimmed ? (parts.length === 3 ? "day" : parts.length === 2 ? "month" : "year") : "";
+
+    try {
+      await saveEpisodeDateOverride(episodeId, trimmed, precision, authToken);
+      applyPodcastDateOverrides();
+      renderPodcastColumn();
+    } catch (err) {
+      window.alert(`Failed to save date: ${String(err?.message || err)}`);
     }
   }
 
@@ -1270,7 +1553,9 @@
     const sub = document.getElementById("podcastSub");
     const list = document.getElementById("podcastList");
     if (!head || !empty || !errBox || !thumb || !title || !sub || !list) return;
-  
+
+    wirePodcastSearch();
+
     const tried = state.podcast.tried;
     const error = state.podcast.error;
     const p = state.podcast.playlist;
@@ -1309,6 +1594,11 @@
       items = items.filter((ep) => episodeReleaseSortKey(ep) != null);
     }
 
+    const searchQuery = document.getElementById("podcastSearchInput")?.value || "";
+    if (searchQuery.trim()) {
+      items = items.filter((ep) => podcastEpisodeMatchesSearch(ep, searchQuery));
+    }
+
     items.sort(comparePodcastEpisodes);
 
     errBox.hidden = true;
@@ -1324,7 +1614,11 @@
     renderPodcastSortControls();
   
     // Render list items
-    list.innerHTML = items.map(renderPodcastItem).join("");
+    list.innerHTML = items.length
+      ? items.map(renderPodcastItem).join("")
+      : (searchQuery.trim()
+          ? `<li class="podcast-search-empty">No episodes match “${escapeHtml(searchQuery.trim())}”.</li>`
+          : "");
     wirePodcastInteractions(list);
     wirePodcastThumbFallbacks(list);
   }
@@ -1516,6 +1810,14 @@
 
     listEl.addEventListener("click", async (e) => {
       const t = e.target;
+
+      const dateEditId = t?.getAttribute?.("data-epdate-edit");
+      if (dateEditId) {
+        e.preventDefault();
+        const ep = (state.podcast.items || []).find((x) => String(x?.id || "") === dateEditId) || null;
+        await handleEditReleaseDateClick(dateEditId, ep);
+        return;
+      }
 
       const toggleId = t?.getAttribute?.("data-epnote-toggle");
       if (toggleId) {
@@ -2122,10 +2424,13 @@
       const tasks = [
         (async () => { try { await loadOthersFallback(); } catch(e){ console.warn('loadOthers failed', e); } })(),
         (async () => { try { await loadPodcastColumn(); } catch(e){ console.warn('loadPodcastColumn failed', e); state.podcast.error = state.podcast.error || String(e?.message || e); } })(),
-        (async () => { try { await loadEpisodeNotesSummary(); } catch(e){ console.warn('loadEpisodeNotesSummary failed', e); } })()
+        (async () => { try { await loadEpisodeNotesSummary(); } catch(e){ console.warn('loadEpisodeNotesSummary failed', e); } })(),
+        (async () => { try { await loadAllEpisodeNotesText(); } catch(e){ console.warn('loadAllEpisodeNotesText failed', e); } })(),
+        (async () => { try { await loadEpisodeDateOverrides(); } catch(e){ console.warn('loadEpisodeDateOverrides failed', e); } })()
       ];
 
       await Promise.allSettled(tasks);
+      applyPodcastDateOverrides();
 
       // compute approximate song-hours immediately (no Worker)
       startSongHoursComputeClientSide();

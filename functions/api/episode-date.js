@@ -1,77 +1,27 @@
-// functions/api/episode-note.js
+// functions/api/episode-date.js
+//
+// Manual release-date overrides for podcast episodes. Spotify sometimes reports
+// a release_date that's really a mirror/re-sync timestamp rather than the true
+// original publish date (After Skool, Wendover Productions, etc.) — this lets
+// the site owner correct those by hand. Overrides are stored in the repo the
+// same way episode notes are (read/write via the GitHub Contents API), keyed
+// by episode ID.
 
 export async function onRequestOptions() {
   return new Response(null, { status: 204, headers: corsHeaders() });
 }
 
-export async function onRequestGet({ env, request }) {
+export async function onRequestGet({ env }) {
   try {
-    const url = new URL(request.url);
-
-    // ✅ NEW: summary mode (single file read, returns which episodes have non-empty notes)
-    const summary = String(url.searchParams.get("summary") || "").trim() === "1";
-    if (summary) {
-      const cfg = getGithubConfig(env);
-      const file = await githubReadJson(cfg, { allowMissing: true });
-      const all = (file.data && typeof file.data === "object") ? file.data : {};
-
-      const episodesWithNotes = [];
-      for (const [episodeId, rows] of Object.entries(all)) {
-        if (!episodeId) continue;
-        if (!Array.isArray(rows) || !rows.length) continue;
-
-        const hasText = rows.some((r) => String(r?.text || "").trim().length > 0);
-        if (hasText) episodesWithNotes.push(String(episodeId));
-      }
-
-      return json({ ok: true, episodesWithNotes }, 200);
-    }
-
-    // ✅ NEW: bulk mode (single file read, returns full note text for every
-    // episode that has any) — powers the podcast search bar's notes search
-    // without a per-episode round trip for each keystroke.
-    const all = String(url.searchParams.get("all") || "").trim() === "1";
-    if (all) {
-      const cfg = getGithubConfig(env);
-      const file = await githubReadJson(cfg, { allowMissing: true });
-      const allData = (file.data && typeof file.data === "object") ? file.data : {};
-
-      const notes = {};
-      for (const [episodeId, rows] of Object.entries(allData)) {
-        if (!episodeId || !Array.isArray(rows)) continue;
-        const cleaned = rows
-          .map((row) => ({
-            timestamp: normalizeTimestamp(row?.timestamp ?? ""),
-            text: String(row?.text ?? "").slice(0, 5000)
-          }))
-          .filter((r) => r.text.trim().length > 0);
-        if (cleaned.length) notes[episodeId] = cleaned;
-      }
-
-      return json({ ok: true, notes }, 200);
-    }
-
-    const episodeId = String(url.searchParams.get("episodeId") || "").trim();
-    if (!episodeId) return json({ ok: false, error: "Missing episodeId" }, 400);
-
     const cfg = getGithubConfig(env);
     const file = await githubReadJson(cfg, { allowMissing: true });
+    const overrides = (file.data && typeof file.data === "object") ? file.data : {};
 
-    const all = (file.data && typeof file.data === "object") ? file.data : {};
-    const raw = Array.isArray(all[episodeId]) ? all[episodeId] : [];
-
-    const notes = raw
-      .map((row) => ({
-        timestamp: normalizeTimestamp(row?.timestamp ?? ""),
-        text: String(row?.text ?? "").slice(0, 5000)
-      }))
-      .filter((r) => r.timestamp || r.text);
-
-    return json({ ok: true, episodeId, notes }, 200);
+    return json({ ok: true, overrides }, 200);
   } catch (err) {
     return json({
       ok: false,
-      error: "Episode note read failed",
+      error: "Episode date read failed",
       message: String(err?.message || err),
       details: err?.details || null,
       stack: String(err?.stack || "")
@@ -81,50 +31,43 @@ export async function onRequestGet({ env, request }) {
 
 export async function onRequestPost({ env, request }) {
   try {
-    // ✅ AUTH: require X-Auth header to match env.AUTH
     enforceAuth(env, request);
 
     const body = await request.json().catch(() => ({}));
     const episodeId = String(body.episodeId || "").trim();
     if (!episodeId) return json({ ok: false, error: "Missing episodeId" }, 400);
 
-    const notesIn = Array.isArray(body.notes) ? body.notes : [];
-    let notes = notesIn
-      .map((n) => ({
-        timestamp: normalizeTimestamp(n?.timestamp ?? "00:00:00"),
-        text: String(n?.text ?? "").trim().slice(0, 5000)
-      }))
-      .filter((n) => n.timestamp || n.text)
-      .slice(0, 500);
-
-    if (!notes.length) notes = [{ timestamp: "00:00:00", text: "" }];
+    const releaseDate = normalizeDate(body.releaseDate);
 
     const cfg = getGithubConfig(env);
-
-    // Read current file (or create if missing)
     const file = await githubReadJson(cfg, { allowMissing: true });
     const all = (file.data && typeof file.data === "object") ? file.data : {};
 
-    // Update
-    all[episodeId] = notes;
+    let msg;
+    if (!releaseDate) {
+      // Empty/missing releaseDate clears the override, reverting to Spotify's own date.
+      delete all[episodeId];
+      msg = `Clear episode date override: ${episodeId}`;
+    } else {
+      const precision = normalizePrecision(body.releaseDatePrecision, releaseDate);
+      all[episodeId] = { releaseDate, releaseDatePrecision: precision };
+      msg = `Set episode date override: ${episodeId} -> ${releaseDate}`;
+    }
 
-    // Write back with sha (or create)
-    const msg = `Update episode notes: ${episodeId}`;
     const write = await githubWriteJson(cfg, all, { sha: file.sha || null, message: msg });
 
     return json({
       ok: true,
       episodeId,
-      notes,
+      override: all[episodeId] || null,
       commit: { sha: write.commitSha || null }
     }, 200);
-
   } catch (err) {
     const status = Number(err?.status) || 500;
 
     return json({
       ok: false,
-      error: status === 401 || status === 403 ? "Unauthorized" : "Episode note write failed",
+      error: status === 401 || status === 403 ? "Unauthorized" : "Episode date write failed",
       message: String(err?.message || err),
       details: err?.details || null,
       stack: String(err?.stack || "")
@@ -133,7 +76,7 @@ export async function onRequestPost({ env, request }) {
 }
 
 /* =========================
-   AUTH (POST-only)
+   AUTH (POST-only) — same shared secret as episode notes
 ========================= */
 
 function enforceAuth(env, request) {
@@ -161,7 +104,7 @@ function enforceAuth(env, request) {
 }
 
 /* =========================
-   GitHub helpers (single canonical config)
+   GitHub helpers
 ========================= */
 
 function getGithubConfig(env) {
@@ -170,14 +113,14 @@ function getGithubConfig(env) {
   const branch = env.GITHUB_BRANCH || "main";
   const token = env.GITHUB_TOKEN;
 
-  // Canonical single path:
-  const path = env.GITHUB_PATH; // MUST be "data/episode-notes.json"
+  // Own file, separate from episode notes' GITHUB_PATH — defaults so no new
+  // secret is required, but can be overridden the same way external-videos.js does.
+  const path = env.GITHUB_DATES_PATH || "data/episode-date-overrides.json";
 
   const missing = [];
   if (!token) missing.push("GITHUB_TOKEN");
   if (!owner) missing.push("GITHUB_OWNER");
   if (!repo) missing.push("GITHUB_REPO");
-  if (!path) missing.push("GITHUB_PATH");
 
   if (missing.length) {
     const e = new Error(`Missing GitHub secrets: ${missing.join(", ")}`);
@@ -188,7 +131,6 @@ function getGithubConfig(env) {
   return { owner, repo, path, branch, token };
 }
 
-// Encode each segment, preserve slashes.
 function ghPath(p) {
   return String(p || "").split("/").map(encodeURIComponent).join("/");
 }
@@ -271,32 +213,23 @@ async function githubWriteJson(cfg, obj, { sha = null, message = "Update JSON" }
    Utilities
 ========================= */
 
-function normalizeTimestamp(s) {
-  const raw = String(s || "").trim();
-  if (!raw) return "00:00:00";
-
-  const parts = raw.split(":").map((x) => x.trim()).filter(Boolean);
-
-  if (parts.length === 1) {
-    const ss = clampInt(parts[0], 0, 59, 0);
-    return `00:00:${String(ss).padStart(2, "0")}`;
-  }
-  if (parts.length === 2) {
-    const mm = clampInt(parts[0], 0, 999, 0);
-    const ss = clampInt(parts[1], 0, 59, 0);
-    return `00:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
-  }
-
-  const hh = clampInt(parts[0], 0, 999, 0);
-  const mm = clampInt(parts[1], 0, 59, 0);
-  const ss = clampInt(parts[2], 0, 59, 0);
-  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+// Accepts "YYYY", "YYYY-MM", or "YYYY-MM-DD"; anything else is rejected (empty override).
+function normalizeDate(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return "";
+  if (!/^\d{4}(-\d{2}(-\d{2})?)?$/.test(s)) return "";
+  return s;
 }
 
-function clampInt(v, min, max, fallback) {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.min(max, Math.max(min, Math.floor(n)));
+function normalizePrecision(raw, releaseDate) {
+  const allowed = new Set(["day", "month", "year"]);
+  const p = String(raw || "").trim().toLowerCase();
+  if (allowed.has(p)) return p;
+
+  const parts = releaseDate.split("-");
+  if (parts.length === 3) return "day";
+  if (parts.length === 2) return "month";
+  return "year";
 }
 
 function b64ToUtf8(b64) {
