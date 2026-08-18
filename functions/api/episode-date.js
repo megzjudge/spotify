@@ -1,11 +1,10 @@
 // functions/api/episode-date.js
 //
-// Manual release-date overrides for podcast episodes. Spotify sometimes reports
-// a release_date that's really a mirror/re-sync timestamp rather than the true
-// original publish date (After Skool, Wendover Productions, etc.) — this lets
-// the site owner correct those by hand. Overrides are stored in the repo the
-// same way episode notes are (read/write via the GitHub Contents API), keyed
-// by episode ID.
+// Manual "date added" overrides for podcast episodes. The podcast list defaults
+// to sorting by date added, and Spotify's own added_at isn't always trustworthy
+// (e.g. after a playlist re-add/re-sync) — this lets the site owner correct it
+// by hand. Overrides are stored in the repo the same way episode notes are
+// (read/write via the GitHub Contents API), keyed by episode ID.
 
 export async function onRequestOptions() {
   return new Response(null, { status: 204, headers: corsHeaders() });
@@ -37,21 +36,20 @@ export async function onRequestPost({ env, request }) {
     const episodeId = String(body.episodeId || "").trim();
     if (!episodeId) return json({ ok: false, error: "Missing episodeId" }, 400);
 
-    const releaseDate = normalizeDate(body.releaseDate);
+    const addedAt = normalizeAddedAt(body.addedAt);
 
     const cfg = getGithubConfig(env);
     const file = await githubReadJson(cfg, { allowMissing: true });
     const all = (file.data && typeof file.data === "object") ? file.data : {};
 
     let msg;
-    if (!releaseDate) {
-      // Empty/missing releaseDate clears the override, reverting to Spotify's own date.
+    if (!addedAt) {
+      // Empty/missing addedAt clears the override, reverting to Spotify's own date.
       delete all[episodeId];
-      msg = `Clear episode date override: ${episodeId}`;
+      msg = `Clear episode date-added override: ${episodeId}`;
     } else {
-      const precision = normalizePrecision(body.releaseDatePrecision, releaseDate);
-      all[episodeId] = { releaseDate, releaseDatePrecision: precision };
-      msg = `Set episode date override: ${episodeId} -> ${releaseDate}`;
+      all[episodeId] = { addedAt };
+      msg = `Set episode date-added override: ${episodeId} -> ${addedAt}`;
     }
 
     const write = await githubWriteJson(cfg, all, { sha: file.sha || null, message: msg });
@@ -213,23 +211,14 @@ async function githubWriteJson(cfg, obj, { sha = null, message = "Update JSON" }
    Utilities
 ========================= */
 
-// Accepts "YYYY", "YYYY-MM", or "YYYY-MM-DD"; anything else is rejected (empty override).
-function normalizeDate(raw) {
+// Accepts "YYYY-MM-DD" (from the date-edit prompt) and anchors it to noon UTC so
+// the calendar date it represents doesn't shift a day for viewers in other
+// timezones; anything else (including empty) is rejected/cleared.
+function normalizeAddedAt(raw) {
   const s = String(raw || "").trim();
   if (!s) return "";
-  if (!/^\d{4}(-\d{2}(-\d{2})?)?$/.test(s)) return "";
-  return s;
-}
-
-function normalizePrecision(raw, releaseDate) {
-  const allowed = new Set(["day", "month", "year"]);
-  const p = String(raw || "").trim().toLowerCase();
-  if (allowed.has(p)) return p;
-
-  const parts = releaseDate.split("-");
-  if (parts.length === 3) return "day";
-  if (parts.length === 2) return "month";
-  return "year";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return "";
+  return `${s}T12:00:00.000Z`;
 }
 
 function b64ToUtf8(b64) {

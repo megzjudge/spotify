@@ -295,7 +295,7 @@
                 type="search"
                 id="podcastSearchInput"
                 class="podcast-search-input"
-                placeholder="Search creator, date (e.g. 2023, 2023-06, 2023-06-15), or notes…"
+                aria-label="Search podcast episodes by creator, date, or notes"
                 autocomplete="off"
                 spellcheck="false"
               >
@@ -633,19 +633,19 @@
     const releasePrecision = it?.releaseDatePrecision ?? it?.release_date_precision ?? "day";
     const releasedLabel = fmtEpisodeDisplayDate(releaseRaw, releasePrecision);
     const addedLabel = fmtEpisodeAddedDisplayDate(it);
-    const isOverridden = !!it?.releaseDateOverridden;
-    const releasedTip = `Released: ${releasedLabel}${isOverridden ? " (manually corrected)" : ""}`;
-    const addedTip = `Added: ${addedLabel}`;
+    const isOverridden = !!it?.addedDateOverridden;
+    const releasedTip = `Released: ${releasedLabel}`;
+    const addedTip = `Added: ${addedLabel}${isOverridden ? " (manually corrected)" : ""}`;
     const episodeId = String(it?.id || "").trim();
 
     const editBtn = episodeId
-      ? `<button type="button" class="pod-date-edit${isOverridden ? " is-overridden" : ""}" title="Correct release date" aria-label="Correct release date" data-epdate-edit="${escapeHtml(episodeId)}">✏️</button>`
+      ? `<button type="button" class="pod-date-edit${isOverridden ? " is-overridden" : ""}" title="Correct date added" aria-label="Correct date added" data-epdate-edit="${escapeHtml(episodeId)}">✏️</button>`
       : "";
 
     return `
       <span class="pod-meta-emoji" tabindex="0" role="img" aria-label="${escapeHtml(addedTip)}" title="${escapeHtml(addedTip)}" data-tip="${escapeHtml(addedTip)}">➕</span>
-      <span class="pod-meta-emoji" tabindex="0" role="img" aria-label="${escapeHtml(releasedTip)}" title="${escapeHtml(releasedTip)}" data-tip="${escapeHtml(releasedTip)}">📅</span>
       ${editBtn}
+      <span class="pod-meta-emoji" tabindex="0" role="img" aria-label="${escapeHtml(releasedTip)}" title="${escapeHtml(releasedTip)}" data-tip="${escapeHtml(releasedTip)}">📅</span>
     `;
   }
 
@@ -1109,24 +1109,23 @@
   }
 
   // Merges manual overrides on top of state.podcast.items so every other piece
-  // of code (sorting, display formatting, search) keeps reading ep.releaseDate /
-  // ep.releaseDatePrecision as usual, unaware an override even happened.
+  // of code (sorting, display formatting, search) keeps reading ep.addedAt as
+  // usual, unaware an override even happened.
   function applyPodcastDateOverrides() {
     const overrides = state.episodeDates.overrides || {};
     state.podcast.items = (state.podcast.items || []).map((ep) => {
       const id = String(ep?.id || "").trim();
       const ov = id ? overrides[id] : null;
-      if (!ov || !ov.releaseDate) return ep;
+      if (!ov || !ov.addedAt) return ep;
       return {
         ...ep,
-        releaseDate: ov.releaseDate,
-        releaseDatePrecision: ov.releaseDatePrecision || "day",
-        releaseDateOverridden: true
+        addedAt: ov.addedAt,
+        addedDateOverridden: true
       };
     });
   }
 
-  async function saveEpisodeDateOverride(episodeId, releaseDate, releaseDatePrecision, authToken) {
+  async function saveEpisodeAddedDateOverride(episodeId, addedAt, authToken) {
     const res = await fetch(API_EPISODE_DATE, {
       method: "POST",
       headers: {
@@ -1134,7 +1133,7 @@
         Accept: "application/json",
         "X-Auth": String(authToken || "")
       },
-      body: JSON.stringify({ episodeId, releaseDate: releaseDate || "", releaseDatePrecision: releaseDatePrecision || "" })
+      body: JSON.stringify({ episodeId, addedAt: addedAt || "" })
     });
 
     const text = await res.text();
@@ -1147,8 +1146,8 @@
       throw new Error(msg);
     }
 
-    if (releaseDate) {
-      state.episodeDates.overrides[episodeId] = data?.override || { releaseDate, releaseDatePrecision: releaseDatePrecision || "day" };
+    if (addedAt) {
+      state.episodeDates.overrides[episodeId] = data?.override || { addedAt };
     } else {
       delete state.episodeDates.overrides[episodeId];
     }
@@ -1156,19 +1155,23 @@
 
   // Lightweight prompt-based editor — mirrors the password gate already used
   // for notes (ensureNotesAuthOrThrow) rather than building a whole new modal.
-  async function handleEditReleaseDateClick(episodeId, ep) {
+  async function handleEditAddedDateClick(episodeId, ep) {
     if (!episodeId) return;
 
-    const current = ep?.releaseDate || "";
+    const currentParts = episodeAddedDateParts(ep);
+    const current = currentParts
+      ? `${currentParts.y}-${String(currentParts.m).padStart(2, "0")}-${String(currentParts.d).padStart(2, "0")}`
+      : "";
+
     const raw = window.prompt(
-      "Set release date as YYYY-MM-DD, YYYY-MM, or YYYY.\nLeave blank and OK to clear the override and use Spotify's date.",
+      "Set date added as YYYY-MM-DD.\nLeave blank and OK to clear the override and use Spotify's date.",
       current
     );
     if (raw === null) return; // cancelled
 
     const trimmed = raw.trim();
-    if (trimmed && !/^\d{4}(-\d{2}(-\d{2})?)?$/.test(trimmed)) {
-      window.alert("Please use YYYY, YYYY-MM, or YYYY-MM-DD.");
+    if (trimmed && !/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      window.alert("Please use YYYY-MM-DD.");
       return;
     }
 
@@ -1180,11 +1183,10 @@
       return;
     }
 
-    const parts = trimmed.split("-");
-    const precision = trimmed ? (parts.length === 3 ? "day" : parts.length === 2 ? "month" : "year") : "";
+    const addedAt = trimmed ? `${trimmed}T12:00:00.000Z` : "";
 
     try {
-      await saveEpisodeDateOverride(episodeId, trimmed, precision, authToken);
+      await saveEpisodeAddedDateOverride(episodeId, addedAt, authToken);
       applyPodcastDateOverrides();
       renderPodcastColumn();
     } catch (err) {
@@ -1826,7 +1828,7 @@
       if (dateEditId) {
         e.preventDefault();
         const ep = (state.podcast.items || []).find((x) => String(x?.id || "") === dateEditId) || null;
-        await handleEditReleaseDateClick(dateEditId, ep);
+        await handleEditAddedDateClick(dateEditId, ep);
         return;
       }
 
