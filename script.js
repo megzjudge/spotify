@@ -1688,8 +1688,8 @@
             <div class="podcast-item-sub">
               <span class="podcast-item-sub-text">${channel ? `${channel} • ` : ""}${escapeHtml(dur)}</span>
               <div class="podcast-item-actions">
-                ${metaIconsHtml}
                 ${playControl.button}
+                ${metaIconsHtml}
                 <button
                   class="epnote-bubble"
                   type="button"
@@ -1811,6 +1811,17 @@
     listEl.addEventListener("click", async (e) => {
       const t = e.target;
 
+      // Mobile has no hover, so a tap toggles the same tooltip hover/focus already show.
+      const tipEl = t?.closest?.(".pod-meta-emoji[data-tip]");
+      if (tipEl) {
+        e.preventDefault();
+        e.stopPropagation();
+        const wasOpen = tipEl.classList.contains("tip-open");
+        document.querySelectorAll(".pod-meta-emoji.tip-open").forEach((el) => el.classList.remove("tip-open"));
+        if (!wasOpen) tipEl.classList.add("tip-open");
+        return;
+      }
+
       const dateEditId = t?.getAttribute?.("data-epdate-edit");
       if (dateEditId) {
         e.preventDefault();
@@ -1847,8 +1858,15 @@
         return;
       }
     });
+
+    if (!document.__podTipCloseBound) {
+      document.__podTipCloseBound = true;
+      document.addEventListener("click", () => {
+        document.querySelectorAll(".pod-meta-emoji.tip-open").forEach((el) => el.classList.remove("tip-open"));
+      });
+    }
   }
-  
+
   function ensureSavedLoadedMaybe(episodeId) {
     const entry = getEpisodeCacheEntry(episodeId);
     if (!entry) return Promise.resolve();

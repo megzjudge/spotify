@@ -468,7 +468,7 @@ main {
    Small additions for podcast meta emojis & spacing
 ========================= */
 
-.pod-meta-emoji { 
+.pod-meta-emoji {
   position: relative;
   display: inline-flex;
   align-items: center;
@@ -480,11 +480,13 @@ main {
   border-radius: 8px;
   font-size: 13px;
   flex-shrink: 0;
+  opacity: 1;
   transition: background 0.12s ease-out, transform 0.08s ease-out;
 }
 
 .pod-meta-emoji:hover,
-.pod-meta-emoji:focus-visible {
+.pod-meta-emoji:focus-visible,
+.pod-meta-emoji.tip-open {
   background: rgba(255,255,255,0.06);
   transform: translateY(-1px);
   outline: none;
@@ -514,7 +516,8 @@ main {
 }
 
 .pod-meta-emoji:hover::after,
-.pod-meta-emoji:focus-visible::after {
+.pod-meta-emoji:focus-visible::after,
+.pod-meta-emoji.tip-open::after {
   opacity: 1;
   visibility: visible;
   transform: translateY(0);
