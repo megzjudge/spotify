@@ -1147,7 +1147,7 @@
     }
 
     if (addedAt) {
-      state.episodeDates.overrides[episodeId] = data?.override || { addedAt };
+      state.episodeDates.overrides[episodeId] = data?.override || { addedAt: `${addedAt}T12:00:00.000Z` };
     } else {
       delete state.episodeDates.overrides[episodeId];
     }
@@ -1183,10 +1183,11 @@
       return;
     }
 
-    const addedAt = trimmed ? `${trimmed}T12:00:00.000Z` : "";
-
+    // Send the bare YYYY-MM-DD — the server normalizes it to a full ISO
+    // timestamp anchored at noon UTC. (Sending it pre-suffixed here used to
+    // fail the server's date regex silently, so every save was a no-op clear.)
     try {
-      await saveEpisodeAddedDateOverride(episodeId, addedAt, authToken);
+      await saveEpisodeAddedDateOverride(episodeId, trimmed, authToken);
       applyPodcastDateOverrides();
       renderPodcastColumn();
     } catch (err) {
@@ -1519,31 +1520,9 @@
       }
 
       state.podcast.items = allEpisodes;
-      logPodcastReleaseDateAudit(allEpisodes);
     } catch (e) {
       state.podcast.error = String(e?.message || e);
     }
-  }
-
-  // Diagnostic only (console, not UI): Spotify's own metadata is missing release_date
-  // for some older/obscure episodes, which is a data gap on Spotify's end, not
-  // something this app can fix. This makes those gaps visible — open devtools,
-  // check the console table, and any row with a blank releaseDate is the culprit.
-  function logPodcastReleaseDateAudit(episodes) {
-    const rows = episodes.map((ep) => ({
-      name: ep?.name || "(untitled)",
-      releaseDate: ep?.releaseDate || null,
-      releaseDatePrecision: ep?.releaseDatePrecision || null,
-      addedAt: ep?.addedAt || null,
-      id: ep?.id || null
-    }));
-
-    // Missing release dates float to the top so they're easy to spot at a glance.
-    rows.sort((a, b) => (a.releaseDate ? 1 : 0) - (b.releaseDate ? 1 : 0));
-
-    const missingCount = rows.filter((r) => !r.releaseDate).length;
-    console.log(`Podcast release-date audit: ${missingCount} of ${rows.length} episodes have no releaseDate from Spotify.`);
-    console.table(rows);
   }
 
   function renderPodcastColumn() {
