@@ -295,7 +295,7 @@
                 type="search"
                 id="podcastSearchInput"
                 class="podcast-search-input"
-                aria-label="Search podcast episodes by creator, date, or notes"
+                aria-label="Search podcast episodes by title, creator, date, or notes"
                 autocomplete="off"
                 spellcheck="false"
               >
@@ -719,7 +719,7 @@
   }
 
   /***********************
-   * Podcast search (creator / date / cloud notes)
+   * Podcast search (title / creator / date / cloud notes)
    ***********************/
   function wirePodcastSearch() {
     const input = document.getElementById("podcastSearchInput");
@@ -819,6 +819,9 @@
   function podcastEpisodeMatchesSearch(ep, rawQuery) {
     const q = String(rawQuery || "").trim().toLowerCase();
     if (!q) return true;
+
+    const title = String(ep?.name || "").toLowerCase();
+    if (title.includes(q)) return true;
 
     const creator = (ep.artists || []).join(" ").toLowerCase();
     if (creator.includes(q)) return true;
