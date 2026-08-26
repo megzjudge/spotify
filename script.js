@@ -1412,7 +1412,7 @@
       if (!playlistMeta) playlistMeta = data.playlist || null;
 
       const items = Array.isArray(data.items) ? data.items : [];
-      const eps = items.filter((x) => (x?.type || "") === "episode");
+      const eps = items.filter((x) => x?.type === "episode" || x?.type === "track");
 
       let addedThisPage = 0;
       for (const ep of eps) {
@@ -1494,7 +1494,9 @@
         if (!state.podcast.playlist) state.podcast.playlist = data.playlist || null;
 
         const items = Array.isArray(data.items) ? data.items : [];
-        const episodes = items.filter((x) => (x?.type || "") === "episode");
+        // Include tracks too — a few comedy skits are saved as songs in this
+        // playlist but belong here alongside the episodes.
+        const episodes = items.filter((x) => x?.type === "episode" || x?.type === "track");
 
         for (const ep of episodes) {
           const id = String(ep?.id || "").trim();
@@ -1642,8 +1644,9 @@
     const metaIconsHtml = renderPodcastMetaIcons(it);
     const badgeHtml = newBadgeHtml(episodeAddedMs(it));
 
-    const playId = episodeId ? `episode:${episodeId}` : null;
-    const spotifyUri = episodeId ? `spotify:episode:${episodeId}` : null;
+    const uriType = it?.type === "track" ? "track" : "episode";
+    const playId = episodeId ? `${uriType}:${episodeId}` : null;
+    const spotifyUri = episodeId ? `spotify:${uriType}:${episodeId}` : null;
     const playControl = playControlHtml(playId, spotifyUri);
 
     return `
