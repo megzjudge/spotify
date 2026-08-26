@@ -315,10 +315,14 @@ async function fetchPlaylistItemsBounded(token, playlistId, maxItems, startOffse
     const remaining = maxItems - items.length;
     const pageLimit = Math.min(100, remaining);
 
+    // market=from_token: without an explicit market, Spotify's playlist-tracks
+    // endpoint can return a fully-null `track` object for episodes that are
+    // actually available — resolving against the authenticated user's own
+    // market avoids that.
     const url =
       nextUrl ||
       `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}/tracks` +
-      `?limit=${pageLimit}&offset=${offset}`;
+      `?limit=${pageLimit}&offset=${offset}&market=from_token`;
 
     const data = await fetchJsonWithRetries(url, token, "playlist items", { maxRetries: 3 });
 
@@ -350,7 +354,7 @@ async function fetchEpisodesByIds(token, ids) {
   const out = [];
   for (let i = 0; i < clean.length; i += 50) {
     const chunk = clean.slice(i, i + 50);
-    const url = `https://api.spotify.com/v1/episodes?ids=${encodeURIComponent(chunk.join(","))}`;
+    const url = `https://api.spotify.com/v1/episodes?ids=${encodeURIComponent(chunk.join(","))}&market=from_token`;
     const data = await fetchJsonWithRetries(url, token, "episodes lookup", { maxRetries: 2 });
     out.push(...(data.episodes || []));
   }
@@ -407,9 +411,15 @@ function describeDroppedItem(it) {
     id: obj?.id || null,
     name: obj?.name || null,
     type: obj?.type || null,
-    isLocal: obj?.is_local ?? null,
+    isLocal: obj?.is_local ?? it?.is_local ?? null,
     addedAt: it?.added_at || null,
-    availableMarketsCount: Array.isArray(obj?.available_markets) ? obj.available_markets.length : null
+    addedByUserId: it?.added_by?.id || null,
+    availableMarketsCount: Array.isArray(obj?.available_markets) ? obj.available_markets.length : null,
+    // Dump every top-level key Spotify sent for this wrapper item (minus the
+    // already-null track) so nothing gets missed if some other field carries
+    // an identifying scrap we didn't think to name explicitly.
+    rawWrapperKeys: it && typeof it === "object" ? Object.keys(it) : null,
+    rawWrapper: it ? { ...it, track: undefined } : null
   };
 }
 
