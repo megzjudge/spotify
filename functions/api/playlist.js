@@ -286,12 +286,16 @@ async function fetchPlaylist(token, playlistId) {
 async function fetchPlaylistItemsBounded(token, playlistId, maxItems, startOffset) {
   let items = [];
   let offset = startOffset;
+  let nextUrl = null;
 
   // Spotify supports limit up to 100 per call for playlist tracks.
-  // We'll request min(100, remaining) until:
-  // - no next page
-  // - we reached maxItems
-  // - Spotify returns fewer than requested (end)
+  // Pagination continuation is driven entirely by Spotify's own `next` URL —
+  // NOT by comparing how many items a page returned to the limit we asked
+  // for. Playlists with unavailable/removed episodes can legitimately return
+  // a short page (e.g. 84 items instead of 100) while `next` is still set;
+  // treating a short page as "end of list" stopped pagination early and
+  // silently truncated the results (this is what caused the site to show
+  // ~894 episodes when Spotify itself reports 978).
   let hasMore = true;
   let nextOffset = null;
 
@@ -300,6 +304,7 @@ async function fetchPlaylistItemsBounded(token, playlistId, maxItems, startOffse
     const pageLimit = Math.min(100, remaining);
 
     const url =
+      nextUrl ||
       `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}/tracks` +
       `?limit=${pageLimit}&offset=${offset}`;
 
@@ -308,20 +313,17 @@ async function fetchPlaylistItemsBounded(token, playlistId, maxItems, startOffse
     const pageItems = Array.isArray(data.items) ? data.items : [];
     items = items.concat(pageItems);
 
-    // Spotify gives next as a URL or null
+    // Spotify gives next as a full URL (with its own authoritative offset) or null.
     if (data.next) {
-      offset += pageItems.length || pageLimit;
+      const parsedOffset = Number(new URL(data.next).searchParams.get("offset"));
+      offset = Number.isFinite(parsedOffset) ? parsedOffset : offset + pageLimit;
+      nextUrl = data.next;
       hasMore = true;
       nextOffset = offset;
     } else {
       hasMore = false;
       nextOffset = null;
-    }
-
-    // If Spotify gave us fewer than requested, stop
-    if (pageItems.length < pageLimit) {
-      hasMore = false;
-      nextOffset = null;
+      nextUrl = null;
     }
   }
 
