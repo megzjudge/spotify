@@ -58,6 +58,7 @@
       error: null,
       playlist: null,
       items: [],
+      droppedItems: [],
       // sorting for podcast panel
       sortBy: "added", // "released" | "added"
       sortDir: "desc" // "asc" | "desc"
@@ -1469,6 +1470,9 @@
 
       let offset = 0;
       let safety = 0;
+      let rawTotal = 0;
+      let droppedTotal = 0;
+      const droppedItems = [];
 
       while (true) {
         safety++;
@@ -1492,6 +1496,10 @@
         }
 
         if (!state.podcast.playlist) state.podcast.playlist = data.playlist || null;
+
+        rawTotal += Number(data.rawCount) || 0;
+        droppedTotal += Number(data.droppedCount) || 0;
+        if (Array.isArray(data.droppedItems)) droppedItems.push(...data.droppedItems);
 
         const items = Array.isArray(data.items) ? data.items : [];
         // Include tracks too — a few comedy skits are saved as songs in this
@@ -1525,6 +1533,18 @@
       }
 
       state.podcast.items = allEpisodes;
+      state.podcast.droppedItems = droppedItems;
+
+      console.info("Podcast fetch tally:", {
+        spotifyReportedTotal: state.podcast.playlist?.totalTracks ?? null,
+        rawItemsSeenAcrossPages: rawTotal,
+        droppedNullItems: droppedTotal, // Spotify returned these with no track/episode payload (removed/unavailable)
+        usableItemsKept: allEpisodes.length
+      });
+      if (droppedItems.length) {
+        console.info(`Podcast items Spotify wouldn't serve data for (${droppedItems.length}):`);
+        console.table(droppedItems);
+      }
     } catch (e) {
       state.podcast.error = String(e?.message || e);
     }

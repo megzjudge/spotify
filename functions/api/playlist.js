@@ -41,7 +41,15 @@ export async function onRequestPost({ env, request }) {
         ? { items: [], nextOffset: null, hasMore: false }
         : await fetchPlaylistItemsBounded(token, playlistId, limit, offset);
 
-    let normalizedItems = items.map(normalizeItem).filter(Boolean);
+    const rawCount = items.length;
+    let normalizedItems = [];
+    const droppedItems = [];
+    for (const it of items) {
+      const norm = normalizeItem(it);
+      if (norm) normalizedItems.push(norm);
+      else droppedItems.push(describeDroppedItem(it));
+    }
+    const droppedCount = droppedItems.length;
 
     // ENRICH: playlist /tracks often returns simplified episodes without release_date.
     // Batch-fetch full episode objects for reliable sort metadata (and images).
@@ -81,7 +89,11 @@ export async function onRequestPost({ env, request }) {
         items: normalizedItems,
         // worker-friendly paging hints
         nextOffset,
-        hasMore
+        hasMore,
+        // diagnostics: lets the client tally raw-vs-usable counts across pages
+        rawCount,
+        droppedCount,
+        droppedItems
       },
       200
     );
@@ -383,6 +395,21 @@ function normalizePlaylist(p, myUserId) {
     totalTracks: p.tracks?.total ?? null,
     ownerIsMe,
     ownerLabel
+  };
+}
+
+// Best-effort identification for a playlist item Spotify gave us no usable
+// track/episode payload for (removed episode, pulled show, region lock, etc.)
+// — captures whatever scraps survive so it can actually be looked up.
+function describeDroppedItem(it) {
+  const obj = it?.track || null;
+  return {
+    id: obj?.id || null,
+    name: obj?.name || null,
+    type: obj?.type || null,
+    isLocal: obj?.is_local ?? null,
+    addedAt: it?.added_at || null,
+    availableMarketsCount: Array.isArray(obj?.available_markets) ? obj.available_markets.length : null
   };
 }
 
