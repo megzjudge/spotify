@@ -1473,6 +1473,8 @@
       let rawTotal = 0;
       let droppedTotal = 0;
       const droppedItems = [];
+      const duplicateItems = [];
+      const noIdItems = [];
 
       while (true) {
         safety++;
@@ -1508,8 +1510,14 @@
 
         for (const ep of episodes) {
           const id = String(ep?.id || "").trim();
-          if (!id) continue;
-          if (seen.has(id)) continue;
+          if (!id) {
+            noIdItems.push(ep);
+            continue;
+          }
+          if (seen.has(id)) {
+            duplicateItems.push(ep);
+            continue;
+          }
           seen.add(id);
           allEpisodes.push(ep);
         }
@@ -1539,11 +1547,21 @@
         spotifyReportedTotal: state.podcast.playlist?.totalTracks ?? null,
         rawItemsSeenAcrossPages: rawTotal,
         droppedNullItems: droppedTotal, // Spotify returned these with no track/episode payload (removed/unavailable)
+        duplicateIdItems: duplicateItems.length, // same track/episode id seen more than once across pages
+        noIdItems: noIdItems.length, // had a type but no usable id (shouldn't normally happen)
         usableItemsKept: allEpisodes.length
       });
       if (droppedItems.length) {
         console.info(`Podcast items Spotify wouldn't serve data for (${droppedItems.length}):`);
         console.table(droppedItems);
+      }
+      if (duplicateItems.length) {
+        console.info(`Podcast items dropped as duplicates (${duplicateItems.length}):`);
+        console.table(duplicateItems.map((ep) => ({ id: ep.id, name: ep.name, type: ep.type, addedAt: ep.addedAt })));
+      }
+      if (noIdItems.length) {
+        console.info(`Podcast items with no id (${noIdItems.length}):`);
+        console.table(noIdItems);
       }
     } catch (e) {
       state.podcast.error = String(e?.message || e);
