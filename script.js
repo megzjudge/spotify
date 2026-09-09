@@ -16,14 +16,8 @@
 
   const PODCAST_PLAYLIST_ID = "2tHrihmpYzDbJ8rit7HtFR";
 
-  const OTHERS_PLAYLIST_IDS = [
-    "41PZG18MrSTagagiIaiG4X",
-    "71z6BdHlnfNj4DKRhuu1Fk",
-    "7jYNznHoIYgJBzwT5jpoOe",
-    "4OXFjf05aU4K1B17AmA7ew",
-    "5ZmAXSBNOEXYLf1e2MiF1D",
-    "3xHirdSDYIrHOZ2gMjMmb1"
-  ];
+  // "Others" playlist IDs come from /api/refresh (functions/api/refresh.js is
+  // the single source of truth) — see state.othersPlaylistIds.
 
   // ✅ Podcast paging config
   const PODCAST_PAGE_LIMIT = 200;
@@ -54,6 +48,7 @@
     snapshot: null,
     filter: "all",
     others: [],
+    othersPlaylistIds: [],
     podcast: {
       tried: false,
       error: null,
@@ -910,9 +905,10 @@
     // usually resolves from othersById with zero network calls. When it does need
     // to fall back, resolve the misses in parallel rather than one at a time.
     const othersById = new Map((state.others || []).map((p) => [p.id, p]));
+    const idsToResolve = state.othersPlaylistIds || [];
 
     const resolved = await Promise.all(
-      OTHERS_PLAYLIST_IDS.map((id) =>
+      idsToResolve.map((id) =>
         othersById.has(id) ? Promise.resolve(othersById.get(id)) : fetchPlaylistMeta(id, "by others")
       )
     );
@@ -2421,6 +2417,7 @@
       state.others = Array.isArray(data?.othersPlaylists)
         ? data.othersPlaylists.map((p) => ({ ...p, ownerLabel: p.ownerLabel || "by others" }))
         : [];
+      state.othersPlaylistIds = Array.isArray(data?.othersPlaylistIds) ? data.othersPlaylistIds : [];
 
       state.episodeNotes.openEpisodeId = null;
       state.episodeNotes.openMode = null;

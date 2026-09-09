@@ -18,11 +18,17 @@ export async function onRequestPost(context) {
      ***********************/
     const PODCAST_PLAYLIST_ID = "2tHrihmpYzDbJ8rit7HtFR";
 
+    // Single source of truth for "others" playlists — script.js no longer
+    // keeps its own copy; it reads othersPlaylistIds back from this response.
     const OTHERS_PLAYLIST_IDS = [
       "41PZG18MrSTagagiIaiG4X",
       "71z6BdHlnfNj4DKRhuu1Fk",
       "7jYNznHoIYgJBzwT5jpoOe",
-      "4OXFjf05aU4K1B17AmA7ew"
+      "4OXFjf05aU4K1B17AmA7ew",
+      "5ZmAXSBNOEXYLf1e2MiF1D",
+      "3xHirdSDYIrHOZ2gMjMmb1",
+      "37i9dQZF1DX5mB2C8gBeUM",
+      "0vvXsWCC9xrXsKd4FyS8kM"
     ];
 
     const HIDE_PLAYLIST_IDS = new Set([
@@ -174,6 +180,7 @@ export async function onRequestPost(context) {
 
       sections: { dailyMix, top, other },
       othersPlaylists,
+      othersPlaylistIds: uniqueOthersIds,
       podcastPlaylist
     };
 
