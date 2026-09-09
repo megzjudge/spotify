@@ -21,7 +21,8 @@
     "71z6BdHlnfNj4DKRhuu1Fk",
     "7jYNznHoIYgJBzwT5jpoOe",
     "4OXFjf05aU4K1B17AmA7ew",
-    "5ZmAXSBNOEXYLf1e2MiF1D"
+    "5ZmAXSBNOEXYLf1e2MiF1D",
+    "3xHirdSDYIrHOZ2gMjMmb1"
   ];
 
   // ✅ Podcast paging config
